@@ -1,3 +1,16 @@
+use actix_utils::mpsc;
+use bytes::{Buf, BytesMut};
+use fallible_iterator::FallibleIterator;
+use futures::{future, pin_mut, ready, StreamExt, TryStreamExt};
+use postgres_protocol::message::backend::Message;
+use std::cell::UnsafeCell;
+use std::collections::HashMap;
+use std::future::Future;
+use std::rc::Rc;
+use std::task::{Context, Poll};
+use std::time::Duration;
+use tokio::io::{AsyncRead, AsyncWrite};
+
 #[cfg(feature = "runtime")]
 use crate::cancel_query;
 use crate::codec::BackendMessages;
@@ -6,7 +19,6 @@ use crate::connection::{Request, RequestMessages};
 use crate::copy_out::CopyOutStream;
 use crate::query::RowStream;
 use crate::simple_query::SimpleQueryStream;
-use crate::slice_iter;
 #[cfg(feature = "runtime")]
 use crate::tls::MakeTlsConnect;
 use crate::tls::TlsConnect;
@@ -18,17 +30,6 @@ use crate::{cancel_query_raw, copy_in, copy_out, query, CopyInSink, Transaction}
 use crate::{prepare, SimpleQueryMessage};
 use crate::{simple_query, Row};
 use crate::{Error, Statement};
-use bytes::{Buf, BytesMut};
-use fallible_iterator::FallibleIterator;
-use futures::channel::mpsc;
-use futures::{future, pin_mut, ready, StreamExt, TryStreamExt};
-use parking_lot::Mutex;
-use postgres_protocol::message::backend::Message;
-use std::collections::HashMap;
-use std::sync::Arc;
-use std::task::{Context, Poll};
-use std::time::Duration;
-use tokio::io::{AsyncRead, AsyncWrite};
 
 pub struct Responses {
     receiver: mpsc::Receiver<BackendMessages>,
@@ -65,17 +66,15 @@ struct State {
 }
 
 pub struct InnerClient {
-    sender: mpsc::UnboundedSender<Request>,
-    state: Mutex<State>,
+    sender: mpsc::Sender<Request>,
+    state: UnsafeCell<State>,
 }
 
 impl InnerClient {
     pub fn send(&self, messages: RequestMessages) -> Result<Responses, Error> {
-        let (sender, receiver) = mpsc::channel(1);
+        let (sender, receiver) = mpsc::channel();
         let request = Request { messages, sender };
-        self.sender
-            .unbounded_send(request)
-            .map_err(|_| Error::closed())?;
+        self.sender.send(request).map_err(|_| Error::closed())?;
 
         Ok(Responses {
             receiver,
@@ -83,43 +82,47 @@ impl InnerClient {
         })
     }
 
+    fn lock(&self) -> &mut State {
+        unsafe { &mut *self.state.get() }
+    }
+
     pub fn typeinfo(&self) -> Option<Statement> {
-        self.state.lock().typeinfo.clone()
+        self.lock().typeinfo.clone()
     }
 
     pub fn set_typeinfo(&self, statement: &Statement) {
-        self.state.lock().typeinfo = Some(statement.clone());
+        self.lock().typeinfo = Some(statement.clone());
     }
 
     pub fn typeinfo_composite(&self) -> Option<Statement> {
-        self.state.lock().typeinfo_composite.clone()
+        self.lock().typeinfo_composite.clone()
     }
 
     pub fn set_typeinfo_composite(&self, statement: &Statement) {
-        self.state.lock().typeinfo_composite = Some(statement.clone());
+        self.lock().typeinfo_composite = Some(statement.clone());
     }
 
     pub fn typeinfo_enum(&self) -> Option<Statement> {
-        self.state.lock().typeinfo_enum.clone()
+        self.lock().typeinfo_enum.clone()
     }
 
     pub fn set_typeinfo_enum(&self, statement: &Statement) {
-        self.state.lock().typeinfo_enum = Some(statement.clone());
+        self.lock().typeinfo_enum = Some(statement.clone());
     }
 
     pub fn type_(&self, oid: Oid) -> Option<Type> {
-        self.state.lock().types.get(&oid).cloned()
+        self.lock().types.get(&oid).cloned()
     }
 
     pub fn set_type(&self, oid: Oid, type_: &Type) {
-        self.state.lock().types.insert(oid, type_.clone());
+        self.lock().types.insert(oid, type_.clone());
     }
 
     pub fn with_buf<F, R>(&self, f: F) -> R
     where
         F: FnOnce(&mut BytesMut) -> R,
     {
-        let mut state = self.state.lock();
+        let state = self.lock();
         let r = f(&mut state.buf);
         state.buf.clear();
         r
@@ -139,8 +142,9 @@ pub(crate) struct SocketConfig {
 ///
 /// The client is one half of what is returned when a connection is established. Users interact with the database
 /// through this client object.
+#[derive(Clone)]
 pub struct Client {
-    inner: Arc<InnerClient>,
+    inner: Rc<InnerClient>,
     #[cfg(feature = "runtime")]
     socket_config: Option<SocketConfig>,
     ssl_mode: SslMode,
@@ -150,15 +154,15 @@ pub struct Client {
 
 impl Client {
     pub(crate) fn new(
-        sender: mpsc::UnboundedSender<Request>,
+        sender: mpsc::Sender<Request>,
         ssl_mode: SslMode,
         process_id: i32,
         secret_key: i32,
     ) -> Client {
         Client {
-            inner: Arc::new(InnerClient {
+            inner: Rc::new(InnerClient {
                 sender,
-                state: Mutex::new(State {
+                state: UnsafeCell::new(State {
                     typeinfo: None,
                     typeinfo_composite: None,
                     typeinfo_enum: None,
@@ -174,7 +178,7 @@ impl Client {
         }
     }
 
-    pub(crate) fn inner(&self) -> &Arc<InnerClient> {
+    pub(crate) fn inner(&self) -> &Rc<InnerClient> {
         &self.inner
     }
 
@@ -215,18 +219,12 @@ impl Client {
     /// # Panics
     ///
     /// Panics if the number of parameters provided does not match the number expected.
-    pub async fn query<T>(
+    pub async fn query(
         &self,
-        statement: &T,
-        params: &[&(dyn ToSql + Sync)],
-    ) -> Result<Vec<Row>, Error>
-    where
-        T: ?Sized + ToStatement,
-    {
-        self.query_raw(statement, slice_iter(params))
-            .await?
-            .try_collect()
-            .await
+        statement: &Statement,
+        params: &[&(dyn ToSql)],
+    ) -> Result<Vec<Row>, Error> {
+        self.query_raw(statement, params).await?.try_collect().await
     }
 
     /// Executes a statement which returns a single row, returning it.
@@ -243,27 +241,28 @@ impl Client {
     /// # Panics
     ///
     /// Panics if the number of parameters provided does not match the number expected.
-    pub async fn query_one<T>(
+    pub fn query_one(
         &self,
-        statement: &T,
-        params: &[&(dyn ToSql + Sync)],
-    ) -> Result<Row, Error>
-    where
-        T: ?Sized + ToStatement,
-    {
-        let stream = self.query_raw(statement, slice_iter(params)).await?;
-        pin_mut!(stream);
+        statement: &Statement,
+        params: &[&(dyn ToSql)],
+    ) -> impl Future<Output = Result<Row, Error>> {
+        let fut = self.query_raw(statement, params);
 
-        let row = match stream.try_next().await? {
-            Some(row) => row,
-            None => return Err(Error::row_count()),
-        };
+        async move {
+            let stream = fut.await?;
+            pin_mut!(stream);
 
-        if stream.try_next().await?.is_some() {
-            return Err(Error::row_count());
+            let row = match stream.try_next().await? {
+                Some(row) => row,
+                None => return Err(Error::row_count()),
+            };
+
+            if stream.try_next().await?.is_some() {
+                return Err(Error::row_count());
+            }
+
+            Ok(row)
         }
-
-        Ok(row)
     }
 
     /// Executes a statements which returns zero or one rows, returning it.
@@ -280,15 +279,12 @@ impl Client {
     /// # Panics
     ///
     /// Panics if the number of parameters provided does not match the number expected.
-    pub async fn query_opt<T>(
+    pub async fn query_opt(
         &self,
-        statement: &T,
-        params: &[&(dyn ToSql + Sync)],
-    ) -> Result<Option<Row>, Error>
-    where
-        T: ?Sized + ToStatement,
-    {
-        let stream = self.query_raw(statement, slice_iter(params)).await?;
+        statement: &Statement,
+        params: &[&(dyn ToSql)],
+    ) -> Result<Option<Row>, Error> {
+        let stream = self.query_raw(statement, params).await?;
         pin_mut!(stream);
 
         let row = match stream.try_next().await? {
@@ -317,14 +313,12 @@ impl Client {
     /// Panics if the number of parameters provided does not match the number expected.
     ///
     /// [`query`]: #method.query
-    pub async fn query_raw<'a, T, I>(&self, statement: &T, params: I) -> Result<RowStream, Error>
-    where
-        T: ?Sized + ToStatement,
-        I: IntoIterator<Item = &'a dyn ToSql>,
-        I::IntoIter: ExactSizeIterator,
-    {
-        let statement = statement.__convert().into_statement(self).await?;
-        query::query(&self.inner, statement, params).await
+    pub fn query_raw(
+        &self,
+        statement: &Statement,
+        params: &[&(dyn ToSql)],
+    ) -> impl Future<Output = Result<RowStream, Error>> {
+        query::query(&self.inner, statement, params)
     }
 
     /// Executes a statement, returning the number of rows modified.
@@ -341,15 +335,11 @@ impl Client {
     /// # Panics
     ///
     /// Panics if the number of parameters provided does not match the number expected.
-    pub async fn execute<T>(
-        &self,
-        statement: &T,
-        params: &[&(dyn ToSql + Sync)],
-    ) -> Result<u64, Error>
+    pub async fn execute<T>(&self, statement: &T, params: &[&(dyn ToSql)]) -> Result<u64, Error>
     where
         T: ?Sized + ToStatement,
     {
-        self.execute_raw(statement, slice_iter(params)).await
+        self.execute_raw(statement, params).await
     }
 
     /// The maximally flexible version of [`execute`].
@@ -366,11 +356,9 @@ impl Client {
     /// Panics if the number of parameters provided does not match the number expected.
     ///
     /// [`execute`]: #method.execute
-    pub async fn execute_raw<'a, T, I>(&self, statement: &T, params: I) -> Result<u64, Error>
+    pub async fn execute_raw<T>(&self, statement: &T, params: &[&(dyn ToSql)]) -> Result<u64, Error>
     where
         T: ?Sized + ToStatement,
-        I: IntoIterator<Item = &'a dyn ToSql>,
-        I::IntoIter: ExactSizeIterator,
     {
         let statement = statement.__convert().into_statement(self).await?;
         query::execute(self.inner(), statement, params).await
@@ -387,7 +375,7 @@ impl Client {
     pub async fn copy_in<T, U>(&self, statement: &T) -> Result<CopyInSink<U>, Error>
     where
         T: ?Sized + ToStatement,
-        U: Buf + 'static + Send,
+        U: Buf + 'static,
     {
         let statement = statement.__convert().into_statement(self).await?;
         copy_in::copy_in(self.inner(), statement).await
@@ -487,12 +475,5 @@ impl Client {
             self.secret_key,
         )
         .await
-    }
-
-    /// Determines if the connection to the server has already closed.
-    ///
-    /// In that case, all future queries will fail.
-    pub fn is_closed(&self) -> bool {
-        self.inner.sender.is_closed()
     }
 }

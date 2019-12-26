@@ -3,10 +3,9 @@ use crate::copy_in::CopyInReceiver;
 use crate::error::DbError;
 use crate::maybe_tls_stream::MaybeTlsStream;
 use crate::{AsyncMessage, Error, Notification};
+use actix_utils::mpsc;
 use bytes::BytesMut;
 use fallible_iterator::FallibleIterator;
-use futures::channel::mpsc;
-use futures::stream::FusedStream;
 use futures::{ready, Sink, Stream, StreamExt};
 use log::trace;
 use postgres_protocol::message::backend::Message;
@@ -50,7 +49,7 @@ enum State {
 pub struct Connection<S, T> {
     stream: Framed<MaybeTlsStream<S, T>, PostgresCodec>,
     parameters: HashMap<String, String>,
-    receiver: mpsc::UnboundedReceiver<Request>,
+    receiver: mpsc::Receiver<Request>,
     pending_request: Option<RequestMessages>,
     pending_response: Option<BackendMessage>,
     responses: VecDeque<Response>,
@@ -65,7 +64,7 @@ where
     pub(crate) fn new(
         stream: Framed<MaybeTlsStream<S, T>, PostgresCodec>,
         parameters: HashMap<String, String>,
-        receiver: mpsc::UnboundedReceiver<Request>,
+        receiver: mpsc::Receiver<Request>,
     ) -> Connection<S, T> {
         Connection {
             stream,
@@ -135,7 +134,7 @@ where
                 } => (messages, request_complete),
             };
 
-            let mut response = match self.responses.pop_front() {
+            let response = match self.responses.pop_front() {
                 Some(response) => response,
                 None => match messages.next().map_err(Error::parse)? {
                     Some(Message::ErrorResponse(error)) => return Err(Error::db(error)),
@@ -143,28 +142,9 @@ where
                 },
             };
 
-            match response.sender.poll_ready(cx) {
-                Poll::Ready(Ok(())) => {
-                    let _ = response.sender.start_send(messages);
-                    if !request_complete {
-                        self.responses.push_front(response);
-                    }
-                }
-                Poll::Ready(Err(_)) => {
-                    // we need to keep paging through the rest of the messages even if the receiver's hung up
-                    if !request_complete {
-                        self.responses.push_front(response);
-                    }
-                }
-                Poll::Pending => {
-                    self.responses.push_front(response);
-                    self.pending_response = Some(BackendMessage::Normal {
-                        messages,
-                        request_complete,
-                    });
-                    trace!("poll_read: waiting on sender");
-                    return Ok(None);
-                }
+            let _ = response.sender.send(messages);
+            if !request_complete {
+                self.responses.push_front(response);
             }
         }
     }
@@ -173,10 +153,6 @@ where
         if let Some(messages) = self.pending_request.take() {
             trace!("retrying pending request");
             return Poll::Ready(Some(messages));
-        }
-
-        if self.receiver.is_terminated() {
-            return Poll::Ready(None);
         }
 
         match self.receiver.poll_next_unpin(cx) {

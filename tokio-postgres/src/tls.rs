@@ -42,7 +42,7 @@ pub trait MakeTlsConnect<S> {
     /// The `TlsConnect` implementation created by this type.
     type TlsConnect: TlsConnect<S, Stream = Self::Stream>;
     /// The error type returned by the `TlsConnect` implementation.
-    type Error: Into<Box<dyn Error + Sync + Send>>;
+    type Error: Into<Box<dyn Error>>;
 
     /// Creates a new `TlsConnect`or.
     ///

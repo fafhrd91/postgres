@@ -11,7 +11,7 @@ use postgres_protocol::message::backend::Message;
 use postgres_protocol::message::frontend;
 use std::marker::PhantomPinned;
 use std::pin::Pin;
-use std::sync::Arc;
+use std::rc::Rc;
 use std::task::{Context, Poll};
 
 pub async fn simple_query(client: &InnerClient, query: &str) -> Result<SimpleQueryStream, Error> {
@@ -56,7 +56,7 @@ pin_project! {
     /// A stream of simple query results.
     pub struct SimpleQueryStream {
         responses: Responses,
-        columns: Option<Arc<[String]>>,
+        columns: Option<Rc<[String]>>,
         #[pin]
         _p: PhantomPinned,
     }

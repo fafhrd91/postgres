@@ -1,7 +1,7 @@
 use crate::client::{InnerClient, Responses};
 use crate::codec::FrontendMessage;
 use crate::connection::RequestMessages;
-use crate::{query, slice_iter, Error, Statement};
+use crate::{query, Error, Statement};
 use bytes::buf::BufExt;
 use bytes::{Buf, BufMut, BytesMut};
 use futures::channel::mpsc;
@@ -88,7 +88,7 @@ pin_project! {
 
 impl<T> CopyInSink<T>
 where
-    T: Buf + 'static + Send,
+    T: Buf + 'static,
 {
     /// A poll-based version of `finish`.
     pub fn poll_finish(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<u64, Error>> {
@@ -140,7 +140,7 @@ where
 
 impl<T> Sink<T> for CopyInSink<T>
 where
-    T: Buf + 'static + Send,
+    T: Buf + 'static,
 {
     type Error = Error;
 
@@ -154,7 +154,7 @@ where
     fn start_send(self: Pin<&mut Self>, item: T) -> Result<(), Error> {
         let this = self.project();
 
-        let data: Box<dyn Buf + Send> = if item.remaining() > 4096 {
+        let data: Box<dyn Buf> = if item.remaining() > 4096 {
             if this.buf.is_empty() {
                 Box::new(item)
             } else {
@@ -180,7 +180,7 @@ where
 
         if !this.buf.is_empty() {
             ready!(this.sender.as_mut().poll_ready(cx)).map_err(|_| Error::closed())?;
-            let data: Box<dyn Buf + Send> = Box::new(this.buf.split().freeze());
+            let data: Box<dyn Buf> = Box::new(this.buf.split().freeze());
             let data = CopyData::new(data).map_err(Error::encode)?;
             this.sender
                 .as_mut()
@@ -198,11 +198,11 @@ where
 
 pub async fn copy_in<T>(client: &InnerClient, statement: Statement) -> Result<CopyInSink<T>, Error>
 where
-    T: Buf + 'static + Send,
+    T: Buf + 'static,
 {
     debug!("executing copy in statement {}", statement.name());
 
-    let buf = query::encode(client, &statement, slice_iter(&[]))?;
+    let buf = query::encode(client, &statement, &[])?;
 
     let (mut sender, receiver) = mpsc::channel(1);
     let receiver = CopyInReceiver::new(receiver);

@@ -8,8 +8,8 @@ use fallible_iterator::FallibleIterator;
 use postgres_protocol::message::backend::DataRowBody;
 use std::fmt;
 use std::ops::Range;
+use std::rc::Rc;
 use std::str;
-use std::sync::Arc;
 
 mod sealed {
     pub trait Sealed {}
@@ -177,14 +177,14 @@ impl Row {
 
 /// A row of data returned from the database by a simple query.
 pub struct SimpleQueryRow {
-    columns: Arc<[String]>,
+    columns: Rc<[String]>,
     body: DataRowBody,
     ranges: Vec<Option<Range<usize>>>,
 }
 
 impl SimpleQueryRow {
     #[allow(clippy::new_ret_no_self)]
-    pub(crate) fn new(columns: Arc<[String]>, body: DataRowBody) -> Result<SimpleQueryRow, Error> {
+    pub(crate) fn new(columns: Rc<[String]>, body: DataRowBody) -> Result<SimpleQueryRow, Error> {
         let ranges = body.ranges().collect().map_err(Error::parse)?;
         Ok(SimpleQueryRow {
             columns,

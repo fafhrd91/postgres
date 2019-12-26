@@ -9,8 +9,7 @@ use crate::types::{ToSql, Type};
 #[cfg(feature = "runtime")]
 use crate::Socket;
 use crate::{
-    bind, query, slice_iter, Client, CopyInSink, Error, Portal, Row, SimpleQueryMessage, Statement,
-    ToStatement,
+    bind, query, Client, CopyInSink, Error, Portal, Row, SimpleQueryMessage, Statement, ToStatement,
 };
 use bytes::Buf;
 use futures::TryStreamExt;
@@ -97,57 +96,43 @@ impl<'a> Transaction<'a> {
     }
 
     /// Like `Client::query`.
-    pub async fn query<T>(
+    pub async fn query(
         &self,
-        statement: &T,
-        params: &[&(dyn ToSql + Sync)],
-    ) -> Result<Vec<Row>, Error>
-    where
-        T: ?Sized + ToStatement,
-    {
+        statement: &Statement,
+        params: &[&(dyn ToSql)],
+    ) -> Result<Vec<Row>, Error> {
         self.client.query(statement, params).await
     }
 
     /// Like `Client::query_one`.
-    pub async fn query_one<T>(
+    pub async fn query_one(
         &self,
-        statement: &T,
-        params: &[&(dyn ToSql + Sync)],
-    ) -> Result<Row, Error>
-    where
-        T: ?Sized + ToStatement,
-    {
+        statement: &Statement,
+        params: &[&(dyn ToSql)],
+    ) -> Result<Row, Error> {
         self.client.query_one(statement, params).await
     }
 
     /// Like `Client::query_opt`.
-    pub async fn query_opt<T>(
+    pub async fn query_opt(
         &self,
-        statement: &T,
-        params: &[&(dyn ToSql + Sync)],
-    ) -> Result<Option<Row>, Error>
-    where
-        T: ?Sized + ToStatement,
-    {
+        statement: &Statement,
+        params: &[&(dyn ToSql)],
+    ) -> Result<Option<Row>, Error> {
         self.client.query_opt(statement, params).await
     }
 
     /// Like `Client::query_raw`.
-    pub async fn query_raw<'b, T, I>(&self, statement: &T, params: I) -> Result<RowStream, Error>
-    where
-        T: ?Sized + ToStatement,
-        I: IntoIterator<Item = &'b dyn ToSql>,
-        I::IntoIter: ExactSizeIterator,
-    {
+    pub async fn query_raw(
+        &self,
+        statement: &Statement,
+        params: &[&(dyn ToSql)],
+    ) -> Result<RowStream, Error> {
         self.client.query_raw(statement, params).await
     }
 
     /// Like `Client::execute`.
-    pub async fn execute<T>(
-        &self,
-        statement: &T,
-        params: &[&(dyn ToSql + Sync)],
-    ) -> Result<u64, Error>
+    pub async fn execute<T>(&self, statement: &T, params: &[&(dyn ToSql)]) -> Result<u64, Error>
     where
         T: ?Sized + ToStatement,
     {
@@ -155,16 +140,11 @@ impl<'a> Transaction<'a> {
     }
 
     /// Like `Client::execute_iter`.
-    pub async fn execute_raw<'b, I, T>(
+    pub async fn execute_raw(
         &self,
         statement: &Statement,
-        params: I,
-    ) -> Result<u64, Error>
-    where
-        T: ?Sized + ToStatement,
-        I: IntoIterator<Item = &'b dyn ToSql>,
-        I::IntoIter: ExactSizeIterator,
-    {
+        params: &[&(dyn ToSql)],
+    ) -> Result<u64, Error> {
         self.client.execute_raw(statement, params).await
     }
 
@@ -176,25 +156,19 @@ impl<'a> Transaction<'a> {
     /// # Panics
     ///
     /// Panics if the number of parameters provided does not match the number expected.
-    pub async fn bind<T>(
-        &self,
-        statement: &T,
-        params: &[&(dyn ToSql + Sync)],
-    ) -> Result<Portal, Error>
+    pub async fn bind<T>(&self, statement: &T, params: &[&(dyn ToSql)]) -> Result<Portal, Error>
     where
         T: ?Sized + ToStatement,
     {
-        self.bind_raw(statement, slice_iter(params)).await
+        self.bind_raw(statement, params).await
     }
 
     /// A maximally flexible version of [`bind`].
     ///
     /// [`bind`]: #method.bind
-    pub async fn bind_raw<'b, T, I>(&self, statement: &T, params: I) -> Result<Portal, Error>
+    pub async fn bind_raw<T>(&self, statement: &T, params: &[&(dyn ToSql)]) -> Result<Portal, Error>
     where
         T: ?Sized + ToStatement,
-        I: IntoIterator<Item = &'b dyn ToSql>,
-        I::IntoIter: ExactSizeIterator,
     {
         let statement = statement.__convert().into_statement(&self.client).await?;
         bind::bind(self.client.inner(), statement, params).await
@@ -226,7 +200,7 @@ impl<'a> Transaction<'a> {
     pub async fn copy_in<T, U>(&self, statement: &T) -> Result<CopyInSink<U>, Error>
     where
         T: ?Sized + ToStatement,
-        U: Buf + 'static + Send,
+        U: Buf + 'static,
     {
         self.client.copy_in(statement).await
     }

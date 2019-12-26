@@ -3,7 +3,7 @@ use crate::codec::FrontendMessage;
 use crate::connection::RequestMessages;
 use crate::Statement;
 use postgres_protocol::message::frontend;
-use std::sync::{Arc, Weak};
+use std::rc::{Rc, Weak};
 
 struct Inner {
     client: Weak<InnerClient>,
@@ -29,12 +29,12 @@ impl Drop for Inner {
 /// Portals can only be used with the connection that created them, and only exist for the duration of the transaction
 /// in which they were created.
 #[derive(Clone)]
-pub struct Portal(Arc<Inner>);
+pub struct Portal(Rc<Inner>);
 
 impl Portal {
-    pub(crate) fn new(client: &Arc<InnerClient>, name: String, statement: Statement) -> Portal {
-        Portal(Arc::new(Inner {
-            client: Arc::downgrade(client),
+    pub(crate) fn new(client: &Rc<InnerClient>, name: String, statement: Statement) -> Portal {
+        Portal(Rc::new(Inner {
+            client: Rc::downgrade(client),
             name,
             statement,
         }))

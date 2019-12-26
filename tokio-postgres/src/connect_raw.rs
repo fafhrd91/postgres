@@ -4,9 +4,9 @@ use crate::connect_tls::connect_tls;
 use crate::maybe_tls_stream::MaybeTlsStream;
 use crate::tls::{TlsConnect, TlsStream};
 use crate::{Client, Connection, Error};
+use actix_utils::mpsc;
 use bytes::BytesMut;
 use fallible_iterator::FallibleIterator;
-use futures::channel::mpsc;
 use futures::{ready, Sink, SinkExt, Stream, TryStreamExt};
 use postgres_protocol::authentication;
 use postgres_protocol::authentication::sasl;
@@ -97,7 +97,7 @@ where
     authenticate(&mut stream, config).await?;
     let (process_id, secret_key, parameters) = read_info(&mut stream).await?;
 
-    let (sender, receiver) = mpsc::unbounded();
+    let (sender, receiver) = mpsc::channel();
     let client = Client::new(sender, config.ssl_mode, process_id, secret_key);
     let connection = Connection::new(stream.inner, parameters, receiver);
 

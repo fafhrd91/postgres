@@ -118,13 +118,6 @@ pub fn encode_bind(
 ) -> Result<(), Error> {
     let params = params.into_iter();
 
-    assert!(
-        statement.params().len() == params.len(),
-        "expected {} parameters but got {}",
-        statement.params().len(),
-        params.len()
-    );
-
     let mut error_idx = 0;
     let r = frontend::bind(
         portal,

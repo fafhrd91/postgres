@@ -1,7 +1,8 @@
-use actix_utils::mpsc;
 use bytes::{Buf, BytesMut};
 use fallible_iterator::FallibleIterator;
 use futures::{future, pin_mut, ready, StreamExt, TryStreamExt};
+use ntex::channel::mpsc;
+use ntex::codec::{AsyncRead, AsyncWrite};
 use postgres_protocol::message::backend::Message;
 use std::cell::UnsafeCell;
 use std::collections::HashMap;
@@ -9,7 +10,6 @@ use std::future::Future;
 use std::rc::Rc;
 use std::task::{Context, Poll};
 use std::time::Duration;
-use tokio::io::{AsyncRead, AsyncWrite};
 
 #[cfg(feature = "runtime")]
 use crate::cancel_query;

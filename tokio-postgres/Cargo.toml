@@ -35,7 +35,7 @@ with-serde_json-1 = ["postgres-types/with-serde_json-1"]
 with-uuid-0_8 = ["postgres-types/with-uuid-0_8"]
 
 [dependencies]
-actix-utils = "1.0.4"
+ntex = "0.1.17"
 bytes = "0.5"
 byteorder = "1.0"
 fallible-iterator = "0.2"
@@ -47,7 +47,6 @@ phf = "0.8"
 postgres-protocol = { version = "0.5.0", path = "../postgres-protocol" }
 postgres-types = { version = "0.1.0", path = "../postgres-types" }
 tokio = { version = "0.2", features = ["io-util"] }
-tokio-util = { version = "0.2", features = ["codec"] }
 
 [dev-dependencies]
 tokio = { version = "0.2", features = ["full"] }

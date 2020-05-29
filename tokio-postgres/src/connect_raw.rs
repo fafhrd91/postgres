@@ -4,10 +4,11 @@ use crate::connect_tls::connect_tls;
 use crate::maybe_tls_stream::MaybeTlsStream;
 use crate::tls::{TlsConnect, TlsStream};
 use crate::{Client, Connection, Error};
-use actix_utils::mpsc;
 use bytes::BytesMut;
 use fallible_iterator::FallibleIterator;
 use futures::{ready, Sink, SinkExt, Stream, TryStreamExt};
+use ntex::channel::mpsc;
+use ntex::codec::{AsyncRead, AsyncWrite, Framed};
 use postgres_protocol::authentication;
 use postgres_protocol::authentication::sasl;
 use postgres_protocol::authentication::sasl::ScramSha256;
@@ -17,8 +18,6 @@ use std::collections::HashMap;
 use std::io;
 use std::pin::Pin;
 use std::task::{Context, Poll};
-use tokio::io::{AsyncRead, AsyncWrite};
-use tokio_util::codec::Framed;
 
 pub struct StartupStream<S, T> {
     inner: Framed<MaybeTlsStream<S, T>, PostgresCodec>,

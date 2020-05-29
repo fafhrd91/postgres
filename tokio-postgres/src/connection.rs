@@ -167,82 +167,92 @@ where
         }
     }
 
-    fn poll_write(&mut self, cx: &mut Context<'_>) -> Result<bool, Error> {
+    fn poll_write(&mut self, cx: &mut Context<'_>) -> Result<(), Error> {
         loop {
             if self.state == State::Closing {
                 trace!("poll_write: done");
-                return Ok(false);
+                if !self.stream.is_write_buf_empty() {
+                    let _ = self.stream.flush(cx);
+                }
+                return Ok(());
             }
 
-            if let Poll::Pending = Pin::new(&mut self.stream)
-                .poll_ready(cx)
-                .map_err(Error::io)?
-            {
-                trace!("poll_write: waiting on socket");
-                return Ok(false);
-            }
-
-            let request = match self.poll_request(cx) {
-                Poll::Ready(Some(request)) => request,
-                Poll::Ready(None) if self.responses.is_empty() && self.state == State::Active => {
-                    trace!("poll_write: at eof, terminating");
-                    self.state = State::Terminating;
-                    let mut request = BytesMut::new();
-                    frontend::terminate(&mut request);
-                    RequestMessages::Single(FrontendMessage::Raw(request.freeze()))
-                }
-                Poll::Ready(None) => {
-                    trace!(
-                        "poll_write: at eof, pending responses {}",
-                        self.responses.len()
-                    );
-                    return Ok(true);
-                }
-                Poll::Pending => {
-                    trace!("poll_write: waiting on request");
-                    return Ok(true);
-                }
-            };
-
-            match request {
-                RequestMessages::Single(request) => {
-                    Pin::new(&mut self.stream)
-                        .start_send(request)
-                        .map_err(Error::io)?;
-                    if self.state == State::Terminating {
-                        trace!("poll_write: sent eof, closing");
+            while !self.stream.is_write_buf_full() {
+                match self.poll_request(cx) {
+                    Poll::Ready(Some(request)) => match request {
+                        RequestMessages::Single(request) => {
+                            self.stream.write(request).map_err(Error::io)?;
+                            if self.state == State::Terminating {
+                                trace!("poll_write: sent eof, closing");
+                                self.state = State::Closing;
+                            } else {
+                                continue;
+                            }
+                        }
+                        RequestMessages::CopyIn(mut receiver) => {
+                            let mut cont = true;
+                            let mut done = false;
+                            let recv = &mut receiver;
+                            while !self.stream.is_write_buf_full() {
+                                match recv.poll_next_unpin(cx) {
+                                    Poll::Ready(Some(message)) => {
+                                        self.stream.write(message).map_err(Error::io)?
+                                    }
+                                    Poll::Ready(None) => {
+                                        trace!("poll_write: finished copy_in request");
+                                        done = true;
+                                        break;
+                                    }
+                                    Poll::Pending => {
+                                        trace!("poll_write: waiting on copy_in stream");
+                                        cont = false;
+                                        break;
+                                    }
+                                };
+                            }
+                            if !done {
+                                self.pending_request = Some(RequestMessages::CopyIn(receiver));
+                            }
+                            if cont {
+                                continue;
+                            }
+                        }
+                    },
+                    Poll::Ready(None)
+                        if self.responses.is_empty() && self.state == State::Active =>
+                    {
+                        trace!("poll_write: at eof, terminating");
+                        self.state = State::Terminating;
+                        let mut request = BytesMut::new();
+                        frontend::terminate(&mut request);
+                        self.stream
+                            .write(FrontendMessage::Raw(request.freeze()))
+                            .map_err(Error::io)?;
                         self.state = State::Closing;
                     }
-                }
-                RequestMessages::CopyIn(mut receiver) => {
-                    let message = match receiver.poll_next_unpin(cx) {
-                        Poll::Ready(Some(message)) => message,
-                        Poll::Ready(None) => {
-                            trace!("poll_write: finished copy_in request");
-                            continue;
-                        }
-                        Poll::Pending => {
-                            trace!("poll_write: waiting on copy_in stream");
-                            self.pending_request = Some(RequestMessages::CopyIn(receiver));
-                            return Ok(true);
-                        }
-                    };
-                    Pin::new(&mut self.stream)
-                        .start_send(message)
-                        .map_err(Error::io)?;
-                    self.pending_request = Some(RequestMessages::CopyIn(receiver));
-                }
-            }
-        }
-    }
+                    Poll::Ready(None) => {
+                        trace!(
+                            "poll_write: at eof, pending responses {}",
+                            self.responses.len()
+                        );
+                    }
+                    Poll::Pending => {
+                        trace!("poll_write: waiting on request");
+                    }
+                };
 
-    fn poll_flush(&mut self, cx: &mut Context<'_>) -> Result<(), Error> {
-        match Pin::new(&mut self.stream)
-            .poll_flush(cx)
-            .map_err(Error::io)?
-        {
-            Poll::Ready(()) => trace!("poll_flush: flushed"),
-            Poll::Pending => trace!("poll_flush: waiting on socket"),
+                break;
+            }
+
+            if !self.stream.is_write_buf_empty() {
+                match self.stream.flush(cx) {
+                    Poll::Pending => break,
+                    Poll::Ready(Ok(_)) => (),
+                    Poll::Ready(Err(err)) => return Err(Error::io(err)),
+                }
+            } else {
+                break;
+            }
         }
         Ok(())
     }
@@ -281,10 +291,8 @@ where
         cx: &mut Context<'_>,
     ) -> Poll<Option<Result<AsyncMessage, Error>>> {
         let message = self.poll_read(cx)?;
-        let want_flush = self.poll_write(cx)?;
-        if want_flush {
-            self.poll_flush(cx)?;
-        }
+        let _ = self.poll_write(cx)?;
+
         match message {
             Some(message) => Poll::Ready(Some(Ok(message))),
             None => match self.poll_shutdown(cx) {

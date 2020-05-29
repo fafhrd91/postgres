@@ -1,9 +1,9 @@
 use bytes::{Buf, Bytes, BytesMut};
 use fallible_iterator::FallibleIterator;
+use ntex::codec::{Decoder, Encoder};
 use postgres_protocol::message::backend;
 use postgres_protocol::message::frontend::CopyData;
 use std::io;
-use ntex::codec::{Decoder, Encoder};
 
 pub enum FrontendMessage {
     Raw(Bytes),

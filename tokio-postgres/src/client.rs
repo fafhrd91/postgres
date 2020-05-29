@@ -145,11 +145,11 @@ pub(crate) struct SocketConfig {
 #[derive(Clone)]
 pub struct Client {
     inner: Rc<InnerClient>,
-    #[cfg(feature = "runtime")]
-    socket_config: Option<SocketConfig>,
-    ssl_mode: SslMode,
-    process_id: i32,
-    secret_key: i32,
+    // #[cfg(feature = "runtime")]
+    // socket_config: Option<SocketConfig>,
+    // ssl_mode: SslMode,
+    // process_id: i32,
+    // secret_key: i32,
 }
 
 impl Client {
@@ -170,11 +170,11 @@ impl Client {
                     buf: BytesMut::new(),
                 }),
             }),
-            #[cfg(feature = "runtime")]
-            socket_config: None,
-            ssl_mode,
-            process_id,
-            secret_key,
+            //#[cfg(feature = "runtime")]
+            //socket_config: None,
+            //ssl_mode,
+            //process_id,
+            //secret_key,
         }
     }
 
@@ -184,7 +184,7 @@ impl Client {
 
     #[cfg(feature = "runtime")]
     pub(crate) fn set_socket_config(&mut self, socket_config: SocketConfig) {
-        self.socket_config = Some(socket_config);
+        // self.socket_config = Some(socket_config);
     }
 
     /// Creates a new prepared statement.
@@ -446,34 +446,36 @@ impl Client {
     ///
     /// Requires the `runtime` Cargo feature (enabled by default).
     #[cfg(feature = "runtime")]
-    pub async fn cancel_query<T>(&self, tls: T) -> Result<(), Error>
+    pub async fn cancel_query<T>(&self, _tls: T) -> Result<(), Error>
     where
         T: MakeTlsConnect<Socket>,
     {
-        cancel_query::cancel_query(
-            self.socket_config.clone(),
-            self.ssl_mode,
-            tls,
-            self.process_id,
-            self.secret_key,
-        )
-        .await
+        // cancel_query::cancel_query(
+        //     self.socket_config.clone(),
+        //     self.ssl_mode,
+        //     tls,
+        //     self.process_id,
+        //     self.secret_key,
+        // )
+        // .await
+        Ok(())
     }
 
     /// Like `cancel_query`, but uses a stream which is already connected to the server rather than opening a new
     /// connection itself.
-    pub async fn cancel_query_raw<S, T>(&self, stream: S, tls: T) -> Result<(), Error>
+    pub async fn cancel_query_raw<S, T>(&self, _stream: S, _tls: T) -> Result<(), Error>
     where
         S: AsyncRead + AsyncWrite + Unpin,
         T: TlsConnect<S>,
     {
-        cancel_query_raw::cancel_query_raw(
-            stream,
-            self.ssl_mode,
-            tls,
-            self.process_id,
-            self.secret_key,
-        )
-        .await
+        // cancel_query_raw::cancel_query_raw(
+        //     stream,
+        //     self.ssl_mode,
+        //     tls,
+        //     self.process_id,
+        //     self.secret_key,
+        // )
+        // .await
+        Ok(())
     }
 }

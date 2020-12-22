@@ -177,7 +177,7 @@ where
                 return Ok(());
             }
 
-            while !self.stream.is_write_buf_full() {
+            loop {
                 match self.poll_request(cx) {
                     Poll::Ready(Some(request)) => match request {
                         RequestMessages::Single(request) => {

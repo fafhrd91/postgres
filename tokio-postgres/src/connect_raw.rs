@@ -32,19 +32,27 @@ where
     type Error = io::Error;
 
     fn poll_ready(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
-        Pin::new(&mut self.inner).poll_ready(cx)
+        Pin::new(&mut self.inner)
+            .poll_ready(cx)
+            .map_err(|e| e.into_inner())
     }
 
     fn start_send(mut self: Pin<&mut Self>, item: FrontendMessage) -> io::Result<()> {
-        Pin::new(&mut self.inner).start_send(item)
+        Pin::new(&mut self.inner)
+            .start_send(item)
+            .map_err(|e| e.into_inner())
     }
 
     fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
-        Pin::new(&mut self.inner).poll_flush(cx)
+        Pin::new(&mut self.inner)
+            .poll_flush(cx)
+            .map_err(|e| e.into_inner())
     }
 
     fn poll_close(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
-        Pin::new(&mut self.inner).poll_close(cx)
+        Pin::new(&mut self.inner)
+            .poll_close(cx)
+            .map_err(|e| e.into_inner())
     }
 }
 
@@ -69,7 +77,7 @@ where
             match ready!(Pin::new(&mut self.inner).poll_next(cx)) {
                 Some(Ok(BackendMessage::Normal { messages, .. })) => self.buf = messages,
                 Some(Ok(BackendMessage::Async(message))) => return Poll::Ready(Some(Ok(message))),
-                Some(Err(e)) => return Poll::Ready(Some(Err(e))),
+                Some(Err(e)) => return Poll::Ready(Some(Err(e.into_inner()))),
                 None => return Poll::Ready(None),
             }
         }

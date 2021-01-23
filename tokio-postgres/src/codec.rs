@@ -41,7 +41,7 @@ impl Encoder for PostgresCodec {
     type Item = FrontendMessage;
     type Error = io::Error;
 
-    fn encode(&mut self, item: FrontendMessage, dst: &mut BytesMut) -> io::Result<()> {
+    fn encode(&self, item: FrontendMessage, dst: &mut BytesMut) -> io::Result<()> {
         match item {
             FrontendMessage::Raw(buf) => dst.extend_from_slice(&buf),
             FrontendMessage::CopyData(data) => data.write(dst),
@@ -55,7 +55,7 @@ impl Decoder for PostgresCodec {
     type Item = BackendMessage;
     type Error = io::Error;
 
-    fn decode(&mut self, src: &mut BytesMut) -> Result<Option<BackendMessage>, io::Error> {
+    fn decode(&self, src: &mut BytesMut) -> Result<Option<BackendMessage>, io::Error> {
         let mut idx = 0;
         let mut request_complete = false;
 

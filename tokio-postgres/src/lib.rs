@@ -98,6 +98,7 @@
 //! crates, respectively.
 #![doc(html_root_url = "https://docs.rs/tokio-postgres/0.5")]
 #![warn(rust_2018_idioms, clippy::all, missing_docs)]
+#![allow(unused_imports, unused_variables, dead_code)]
 
 pub use crate::client::Client;
 pub use crate::config::Config;

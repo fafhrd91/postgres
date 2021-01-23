@@ -87,7 +87,7 @@ where
 
         Pin::new(&mut self.stream)
             .poll_next(cx)
-            .map(|o| o.map(|r| r.map_err(Error::io)))
+            .map(|o| o.map(|r| r.map_err(|e| Error::io(e.into_inner()))))
     }
 
     fn poll_read(&mut self, cx: &mut Context<'_>) -> Result<Option<AsyncMessage>, Error> {
@@ -264,7 +264,7 @@ where
 
         match Pin::new(&mut self.stream)
             .poll_close(cx)
-            .map_err(Error::io)?
+            .map_err(|e| Error::io(e.into_inner()))?
         {
             Poll::Ready(()) => {
                 trace!("poll_shutdown: complete");

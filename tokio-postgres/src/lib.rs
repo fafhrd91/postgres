@@ -161,12 +161,9 @@ pub mod types;
 ///
 /// [`Config`]: config/struct.Config.html
 #[cfg(feature = "runtime")]
-pub async fn connect<T>(
-    config: &str,
-    tls: T,
-) -> Result<(Client, Connection<Socket, T::Stream>), Error>
+pub async fn connect<T>(config: &str, tls: T) -> Result<(Client, Connection), Error>
 where
-    T: MakeTlsConnect<Socket>,
+    T: MakeTlsConnect<Socket> + 'static,
 {
     let config = config.parse::<Config>()?;
     config.connect(tls).await

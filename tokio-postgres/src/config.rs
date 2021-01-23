@@ -413,9 +413,9 @@ impl Config {
     ///
     /// Requires the `runtime` Cargo feature (enabled by default).
     #[cfg(feature = "runtime")]
-    pub async fn connect<T>(&self, tls: T) -> Result<(Client, Connection<Socket, T::Stream>), Error>
+    pub async fn connect<T>(&self, tls: T) -> Result<(Client, Connection), Error>
     where
-        T: MakeTlsConnect<Socket>,
+        T: MakeTlsConnect<Socket> + 'static,
     {
         connect(tls, self).await
     }
@@ -423,14 +423,10 @@ impl Config {
     /// Connects to a PostgreSQL database over an arbitrary stream.
     ///
     /// All of the settings other than `user`, `password`, `dbname`, `options`, and `application_name` name are ignored.
-    pub async fn connect_raw<S, T>(
-        &self,
-        stream: S,
-        tls: T,
-    ) -> Result<(Client, Connection<S, T::Stream>), Error>
+    pub async fn connect_raw<S, T>(&self, stream: S, tls: T) -> Result<(Client, Connection), Error>
     where
-        S: AsyncRead + AsyncWrite + Unpin,
-        T: TlsConnect<S>,
+        S: AsyncRead + AsyncWrite + Unpin + 'static,
+        T: TlsConnect<S> + 'static,
     {
         connect_raw(stream, tls, self).await
     }

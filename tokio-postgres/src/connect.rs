@@ -8,12 +8,9 @@ use futures::{future, pin_mut, Future, FutureExt, Stream};
 use std::io;
 use std::task::Poll;
 
-pub async fn connect<T>(
-    mut tls: T,
-    config: &Config,
-) -> Result<(Client, Connection<Socket, T::Stream>), Error>
+pub async fn connect<T>(mut tls: T, config: &Config) -> Result<(Client, Connection), Error>
 where
-    T: MakeTlsConnect<Socket>,
+    T: MakeTlsConnect<Socket> + 'static,
 {
     if config.host.is_empty() {
         return Err(Error::config("host missing".into()));
@@ -56,9 +53,9 @@ async fn connect_once<T>(
     port: u16,
     tls: T,
     config: &Config,
-) -> Result<(Client, Connection<Socket, T::Stream>), Error>
+) -> Result<(Client, Connection), Error>
 where
-    T: TlsConnect<Socket>,
+    T: TlsConnect<Socket> + 'static,
 {
     let socket = connect_socket(
         host,

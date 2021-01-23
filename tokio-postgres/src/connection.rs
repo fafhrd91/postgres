@@ -9,12 +9,12 @@ use futures::{ready, Sink, Stream, StreamExt};
 use log::trace;
 use ntex::channel::mpsc;
 use ntex::codec::{AsyncRead, AsyncWrite, Framed};
+use ntex::framed::{ReadTask, State as IoState, WriteTask};
 use postgres_protocol::message::backend::Message;
 use postgres_protocol::message::frontend;
 use std::collections::{HashMap, VecDeque};
-use std::future::Future;
-use std::pin::Pin;
 use std::task::{Context, Poll};
+use std::{cell::RefCell, future::Future, pin::Pin, rc::Rc};
 
 pub enum RequestMessages {
     Single(FrontendMessage),
@@ -45,49 +45,39 @@ enum State {
 /// `Connection` implements `Future`, and only resolves when the connection is closed, either because a fatal error has
 /// occurred, or because its associated `Client` has dropped and all outstanding work has completed.
 #[must_use = "futures do nothing unless polled"]
-pub struct Connection<S, T> {
-    stream: Framed<MaybeTlsStream<S, T>, PostgresCodec>,
+pub struct Connection {
+    io: IoState,
+    codec: PostgresCodec,
     parameters: HashMap<String, String>,
     receiver: mpsc::Receiver<Request>,
-    pending_request: Option<RequestMessages>,
-    pending_response: Option<BackendMessage>,
     responses: VecDeque<Response>,
     state: State,
 }
 
-impl<S, T> Connection<S, T>
-where
-    S: AsyncRead + AsyncWrite + Unpin,
-    T: AsyncRead + AsyncWrite + Unpin,
-{
-    pub(crate) fn new(
+impl Connection {
+    pub(crate) fn new<S, T>(
         stream: Framed<MaybeTlsStream<S, T>, PostgresCodec>,
         parameters: HashMap<String, String>,
         receiver: mpsc::Receiver<Request>,
-    ) -> Connection<S, T> {
+    ) -> Connection
+    where
+        S: AsyncRead + AsyncWrite + Unpin + 'static,
+        T: AsyncRead + AsyncWrite + Unpin + 'static,
+    {
+        let (steram, codec, io) = IoState::from_framed(stream);
+
+        let steram = Rc::new(RefCell::new(steram));
+        ntex::rt::spawn(ReadTask::new(steram.clone(), io.clone()));
+        ntex::rt::spawn(WriteTask::new(steram, io.clone()));
+
         Connection {
-            stream,
+            io,
+            codec,
             parameters,
             receiver,
-            pending_request: None,
-            pending_response: None,
             responses: VecDeque::new(),
             state: State::Active,
         }
-    }
-
-    fn poll_response(
-        &mut self,
-        cx: &mut Context<'_>,
-    ) -> Poll<Option<Result<BackendMessage, Error>>> {
-        if let Some(message) = self.pending_response.take() {
-            trace!("retrying pending response");
-            return Poll::Ready(Some(Ok(message)));
-        }
-
-        Pin::new(&mut self.stream)
-            .poll_next(cx)
-            .map(|o| o.map(|r| r.map_err(|e| Error::io(e.into_inner()))))
     }
 
     fn poll_read(&mut self, cx: &mut Context<'_>) -> Result<Option<AsyncMessage>, Error> {
@@ -97,11 +87,14 @@ where
         }
 
         loop {
-            let message = match self.poll_response(cx)? {
-                Poll::Ready(Some(message)) => message,
-                Poll::Ready(None) => return Err(Error::closed()),
-                Poll::Pending => {
-                    trace!("poll_read: waiting on response");
+            let message = match self.io.decode_item(&self.codec).map_err(|e| Error::io(e))? {
+                Some(message) => message,
+                None => {
+                    if !self.io.is_read_ready() {
+                        self.io.dsp_read_more_data(cx.waker());
+                    } else {
+                        self.io.dsp_register_task(cx.waker());
+                    }
                     return Ok(None);
                 }
             };
@@ -149,11 +142,6 @@ where
     }
 
     fn poll_request(&mut self, cx: &mut Context<'_>) -> Poll<Option<RequestMessages>> {
-        if let Some(messages) = self.pending_request.take() {
-            trace!("retrying pending request");
-            return Poll::Ready(Some(messages));
-        }
-
         match self.receiver.poll_next_unpin(cx) {
             Poll::Ready(Some(request)) => {
                 trace!("polled new request");
@@ -170,10 +158,7 @@ where
     fn poll_write(&mut self, cx: &mut Context<'_>) -> Result<(), Error> {
         loop {
             if self.state == State::Closing {
-                trace!("poll_write: done");
-                if !self.stream.is_write_buf_empty() {
-                    let _ = self.stream.flush(cx);
-                }
+                self.io.shutdown_io();
                 return Ok(());
             }
 
@@ -181,7 +166,9 @@ where
                 match self.poll_request(cx) {
                     Poll::Ready(Some(request)) => match request {
                         RequestMessages::Single(request) => {
-                            self.stream.write(request).map_err(Error::io)?;
+                            self.io
+                                .write_item(request, &self.codec)
+                                .map_err(Error::io)?;
                             if self.state == State::Terminating {
                                 trace!("poll_write: sent eof, closing");
                                 self.state = State::Closing;
@@ -190,31 +177,21 @@ where
                             }
                         }
                         RequestMessages::CopyIn(mut receiver) => {
-                            let mut cont = true;
-                            let mut done = false;
                             let recv = &mut receiver;
-                            while !self.stream.is_write_buf_full() {
-                                match recv.poll_next_unpin(cx) {
-                                    Poll::Ready(Some(message)) => {
-                                        self.stream.write(message).map_err(Error::io)?
-                                    }
-                                    Poll::Ready(None) => {
-                                        trace!("poll_write: finished copy_in request");
-                                        done = true;
-                                        break;
-                                    }
-                                    Poll::Pending => {
-                                        trace!("poll_write: waiting on copy_in stream");
-                                        cont = false;
-                                        break;
-                                    }
-                                };
-                            }
-                            if !done {
-                                self.pending_request = Some(RequestMessages::CopyIn(receiver));
-                            }
-                            if cont {
-                                continue;
+                            match recv.poll_next_unpin(cx) {
+                                Poll::Ready(Some(message)) => {
+                                    self.io
+                                        .write_item(message, &self.codec)
+                                        .map_err(Error::io)?;
+                                }
+                                Poll::Ready(None) => {
+                                    trace!("poll_write: finished copy_in request");
+                                    break;
+                                }
+                                Poll::Pending => {
+                                    trace!("poll_write: waiting on copy_in stream");
+                                    continue;
+                                }
                             }
                         }
                     },
@@ -225,8 +202,8 @@ where
                         self.state = State::Terminating;
                         let mut request = BytesMut::new();
                         frontend::terminate(&mut request);
-                        self.stream
-                            .write(FrontendMessage::Raw(request.freeze()))
+                        self.io
+                            .write_item(FrontendMessage::Raw(request.freeze()), &self.codec)
                             .map_err(Error::io)?;
                         self.state = State::Closing;
                     }
@@ -243,16 +220,6 @@ where
 
                 break;
             }
-
-            if !self.stream.is_write_buf_empty() {
-                match self.stream.flush(cx) {
-                    Poll::Pending => break,
-                    Poll::Ready(Ok(_)) => (),
-                    Poll::Ready(Err(err)) => return Err(Error::io(err)),
-                }
-            } else {
-                break;
-            }
         }
         Ok(())
     }
@@ -261,20 +228,8 @@ where
         if self.state != State::Closing {
             return Poll::Pending;
         }
-
-        match Pin::new(&mut self.stream)
-            .poll_close(cx)
-            .map_err(|e| Error::io(e.into_inner()))?
-        {
-            Poll::Ready(()) => {
-                trace!("poll_shutdown: complete");
-                Poll::Ready(Ok(()))
-            }
-            Poll::Pending => {
-                trace!("poll_shutdown: waiting on socket");
-                Poll::Pending
-            }
-        }
+        self.io.shutdown_io();
+        Poll::Ready(Ok(()))
     }
 
     /// Returns the value of a runtime parameter for this connection.
@@ -304,14 +259,14 @@ where
     }
 }
 
-impl<S, T> Future for Connection<S, T>
-where
-    S: AsyncRead + AsyncWrite + Unpin,
-    T: AsyncRead + AsyncWrite + Unpin,
-{
+impl Future for Connection {
     type Output = Result<(), Error>;
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Error>> {
+        if self.io.is_dsp_stopped() {
+            return Poll::Ready(Ok(()));
+        }
+
         while let Some(_) = ready!(self.poll_message(cx)?) {}
         Poll::Ready(Ok(()))
     }

@@ -88,10 +88,10 @@ pub async fn connect_raw<S, T>(
     stream: S,
     tls: T,
     config: &Config,
-) -> Result<(Client, Connection<S, T::Stream>), Error>
+) -> Result<(Client, Connection), Error>
 where
-    S: AsyncRead + AsyncWrite + Unpin,
-    T: TlsConnect<S>,
+    S: AsyncRead + AsyncWrite + Unpin + 'static,
+    T: TlsConnect<S> + 'static,
 {
     let stream = connect_tls(stream, config.ssl_mode, tls).await?;
 

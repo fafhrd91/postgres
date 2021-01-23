@@ -156,70 +156,66 @@ impl Connection {
     }
 
     fn poll_write(&mut self, cx: &mut Context<'_>) -> Result<(), Error> {
-        loop {
-            if self.state == State::Closing {
-                self.io.shutdown_io();
-                return Ok(());
-            }
+        if self.state == State::Closing {
+            self.io.shutdown_io();
+            return Ok(());
+        }
 
-            loop {
-                match self.poll_request(cx) {
-                    Poll::Ready(Some(request)) => match request {
-                        RequestMessages::Single(request) => {
-                            self.io
-                                .write_item(request, &self.codec)
-                                .map_err(Error::io)?;
-                            if self.state == State::Terminating {
-                                trace!("poll_write: sent eof, closing");
-                                self.state = State::Closing;
-                            } else {
+        loop {
+            match self.poll_request(cx) {
+                Poll::Ready(Some(request)) => match request {
+                    RequestMessages::Single(request) => {
+                        self.io
+                            .write_item(request, &self.codec)
+                            .map_err(Error::io)?;
+                        if self.state == State::Terminating {
+                            trace!("poll_write: sent eof, closing");
+                            self.state = State::Closing;
+                        } else {
+                            continue;
+                        }
+                    }
+                    RequestMessages::CopyIn(mut receiver) => {
+                        let recv = &mut receiver;
+                        match recv.poll_next_unpin(cx) {
+                            Poll::Ready(Some(message)) => {
+                                self.io
+                                    .write_item(message, &self.codec)
+                                    .map_err(Error::io)?;
+                            }
+                            Poll::Ready(None) => {
+                                trace!("poll_write: finished copy_in request");
+                                break;
+                            }
+                            Poll::Pending => {
+                                trace!("poll_write: waiting on copy_in stream");
                                 continue;
                             }
                         }
-                        RequestMessages::CopyIn(mut receiver) => {
-                            let recv = &mut receiver;
-                            match recv.poll_next_unpin(cx) {
-                                Poll::Ready(Some(message)) => {
-                                    self.io
-                                        .write_item(message, &self.codec)
-                                        .map_err(Error::io)?;
-                                }
-                                Poll::Ready(None) => {
-                                    trace!("poll_write: finished copy_in request");
-                                    break;
-                                }
-                                Poll::Pending => {
-                                    trace!("poll_write: waiting on copy_in stream");
-                                    continue;
-                                }
-                            }
-                        }
-                    },
-                    Poll::Ready(None)
-                        if self.responses.is_empty() && self.state == State::Active =>
-                    {
-                        trace!("poll_write: at eof, terminating");
-                        self.state = State::Terminating;
-                        let mut request = BytesMut::new();
-                        frontend::terminate(&mut request);
-                        self.io
-                            .write_item(FrontendMessage::Raw(request.freeze()), &self.codec)
-                            .map_err(Error::io)?;
-                        self.state = State::Closing;
                     }
-                    Poll::Ready(None) => {
-                        trace!(
-                            "poll_write: at eof, pending responses {}",
-                            self.responses.len()
-                        );
-                    }
-                    Poll::Pending => {
-                        trace!("poll_write: waiting on request");
-                    }
-                };
+                },
+                Poll::Ready(None) if self.responses.is_empty() && self.state == State::Active => {
+                    trace!("poll_write: at eof, terminating");
+                    self.state = State::Terminating;
+                    let mut request = BytesMut::new();
+                    frontend::terminate(&mut request);
+                    self.io
+                        .write_item(FrontendMessage::Raw(request.freeze()), &self.codec)
+                        .map_err(Error::io)?;
+                    self.state = State::Closing;
+                }
+                Poll::Ready(None) => {
+                    trace!(
+                        "poll_write: at eof, pending responses {}",
+                        self.responses.len()
+                    );
+                }
+                Poll::Pending => {
+                    trace!("poll_write: waiting on request");
+                }
+            };
 
-                break;
-            }
+            break;
         }
         Ok(())
     }

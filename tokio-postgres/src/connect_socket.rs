@@ -20,11 +20,6 @@ pub(crate) async fn connect_socket(
             let socket =
                 connect_with_timeout(TcpStream::connect((&**host, port)), connect_timeout).await?;
             socket.set_nodelay(true).map_err(Error::connect)?;
-            if keepalives {
-                socket
-                    .set_keepalive(Some(keepalives_idle))
-                    .map_err(Error::connect)?;
-            }
 
             Ok(Socket::new_tcp(socket))
         }

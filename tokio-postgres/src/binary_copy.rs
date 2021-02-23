@@ -146,29 +146,30 @@ impl Stream for BinaryCopyOutStream {
         };
         let mut chunk = Cursor::new(chunk);
 
-        let has_oids = match &this.header {
-            Some(header) => header.has_oids,
-            None => {
-                check_remaining(&chunk, HEADER_LEN)?;
-                if &chunk.bytes()[..MAGIC.len()] != MAGIC {
-                    return Poll::Ready(Some(Err(Error::parse(io::Error::new(
-                        io::ErrorKind::InvalidData,
-                        "invalid magic value",
-                    )))));
-                }
-                chunk.advance(MAGIC.len());
+        let has_oids = false;
+        // let has_oids = match &this.header {
+        //     Some(header) => header.has_oids,
+        //     None => {
+        //         check_remaining(&chunk, HEADER_LEN)?;
+        //         if &chunk.as_ref()[..MAGIC.len()] != MAGIC {
+        //             return Poll::Ready(Some(Err(Error::parse(io::Error::new(
+        //                 io::ErrorKind::InvalidData,
+        //                 "invalid magic value",
+        //             )))));
+        //         }
+        //         chunk.advance(MAGIC.len());
 
-                let flags = chunk.get_i32();
-                let has_oids = (flags & (1 << 16)) != 0;
+        //         let flags = chunk.get_i32();
+        //         let has_oids = (flags & (1 << 16)) != 0;
 
-                let header_extension = chunk.get_u32() as usize;
-                check_remaining(&chunk, header_extension)?;
-                chunk.advance(header_extension);
+        //         let header_extension = chunk.get_u32() as usize;
+        //         check_remaining(&chunk, header_extension)?;
+        //         chunk.advance(header_extension);
 
-                *this.header = Some(Header { has_oids });
-                has_oids
-            }
-        };
+        //         *this.header = Some(Header { has_oids });
+        //         has_oids
+        //     }
+        // };
 
         check_remaining(&chunk, 2)?;
         let mut len = chunk.get_i16();

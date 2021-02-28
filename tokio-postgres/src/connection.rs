@@ -90,11 +90,7 @@ impl Connection {
             let message = match self.io.decode_item(&self.codec).map_err(|e| Error::io(e))? {
                 Some(message) => message,
                 None => {
-                    if !self.io.is_read_ready() {
-                        self.io.dsp_read_more_data(cx.waker());
-                    } else {
-                        self.io.dsp_register_task(cx.waker());
-                    }
+                    self.io.dsp_read_more_data(cx.waker());
                     return Ok(None);
                 }
             };
@@ -211,7 +207,7 @@ impl Connection {
                     );
                 }
                 Poll::Pending => {
-                    trace!("poll_write: waiting on request");
+                    trace!("poll_write: waiting for request");
                 }
             };
 

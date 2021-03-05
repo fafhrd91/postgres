@@ -65,13 +65,12 @@ impl Connection {
         T: AsyncRead + AsyncWrite + Unpin + 'static,
     {
         let (stream, codec, io) = IoState::from_framed(stream);
-
         let io = io
             .low_watermark(1024)
             .read_high_watermark(65535)
             .write_high_watermark(65535);
 
-        let steram = Rc::new(RefCell::new(stream));
+        let stream = Rc::new(RefCell::new(stream));
         ntex::rt::spawn(ReadTask::new(stream.clone(), io.clone()));
         ntex::rt::spawn(WriteTask::new(stream, io.clone()));
 

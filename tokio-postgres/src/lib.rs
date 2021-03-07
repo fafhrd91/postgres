@@ -103,12 +103,9 @@
 pub use crate::client::Client;
 pub use crate::config::Config;
 pub use crate::connection::Connection;
-pub use crate::copy_in::CopyInSink;
-pub use crate::copy_out::CopyOutStream;
 use crate::error::DbError;
 pub use crate::error::Error;
 pub use crate::portal::Portal;
-pub use crate::query::RowStream;
 pub use crate::row::{Row, SimpleQueryRow};
 pub use crate::simple_query::SimpleQueryStream;
 #[cfg(feature = "runtime")]
@@ -118,10 +115,9 @@ pub use crate::statement::{Column, Statement};
 use crate::tls::MakeTlsConnect;
 pub use crate::tls::NoTls;
 pub use crate::to_statement::ToStatement;
-pub use crate::transaction::Transaction;
+//pub use crate::transaction::Transaction;
 use crate::types::ToSql;
 
-pub mod binary_copy;
 mod bind;
 #[cfg(feature = "runtime")]
 mod cancel_query;
@@ -136,8 +132,6 @@ mod connect_raw;
 mod connect_socket;
 mod connect_tls;
 mod connection;
-mod copy_in;
-mod copy_out;
 pub mod error;
 mod maybe_tls_stream;
 mod portal;
@@ -150,7 +144,7 @@ mod socket;
 mod statement;
 pub mod tls;
 mod to_statement;
-mod transaction;
+//mod transaction;
 pub mod types;
 
 /// A convenience function which parses a connection string and connects to the database.

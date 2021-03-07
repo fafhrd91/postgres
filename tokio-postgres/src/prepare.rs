@@ -1,10 +1,3 @@
-use crate::client::InnerClient;
-use crate::codec::FrontendMessage;
-use crate::connection::RequestMessages;
-use crate::error::SqlState;
-use crate::query;
-use crate::types::{Field, Kind, Oid, Type};
-use crate::{Column, Error, Statement};
 use bytes::Bytes;
 use fallible_iterator::FallibleIterator;
 use futures::{pin_mut, TryStreamExt};
@@ -14,6 +7,13 @@ use std::future::Future;
 use std::pin::Pin;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicUsize, Ordering};
+
+use crate::client::InnerClient;
+use crate::codec::FrontendMessage;
+use crate::error::SqlState;
+use crate::query;
+use crate::types::{Field, Kind, Oid, Type};
+use crate::{Column, Error, Statement};
 
 const TYPEINFO_QUERY: &str = "\
 SELECT t.typname, t.typtype, t.typelem, r.rngsubtype, t.typbasetype, n.nspname, t.typrelid
@@ -64,21 +64,21 @@ pub async fn prepare(
 ) -> Result<Statement, Error> {
     let name = format!("s{}", NEXT_ID.fetch_add(1, Ordering::SeqCst));
     let buf = encode(client, &name, query, types)?;
-    let mut responses = client.send(RequestMessages::Single(FrontendMessage::Raw(buf)))?;
+    let mut responses = client.send(FrontendMessage::Raw(buf))?.receiver.await?;
 
-    match responses.next().await? {
-        Message::ParseComplete => {}
+    match responses.pop_front() {
+        Some(Message::ParseComplete) => (),
         _ => return Err(Error::unexpected_message()),
     }
 
-    let parameter_description = match responses.next().await? {
-        Message::ParameterDescription(body) => body,
+    let parameter_description = match responses.pop_front() {
+        Some(Message::ParameterDescription(body)) => body,
         _ => return Err(Error::unexpected_message()),
     };
 
-    let row_description = match responses.next().await? {
-        Message::RowDescription(body) => Some(body),
-        Message::NoData => None,
+    let row_description = match responses.pop_front() {
+        Some(Message::RowDescription(body)) => Some(body),
+        Some(Message::NoData) => None,
         _ => return Err(Error::unexpected_message()),
     };
 
@@ -131,11 +131,11 @@ async fn get_type(client: &Rc<InnerClient>, oid: Oid) -> Result<Type, Error> {
     let stmt = typeinfo_statement(client).await?;
 
     let rows = query::query(client, &stmt, &[&oid]).await?;
-    pin_mut!(rows);
 
-    let row = match rows.try_next().await? {
-        Some(row) => row,
-        None => return Err(Error::unexpected_message()),
+    let row = if !rows.is_empty() {
+        &rows[0]
+    } else {
+        return Err(Error::unexpected_message());
     };
 
     let name: String = row.try_get(0)?;
@@ -200,11 +200,11 @@ async fn typeinfo_statement(client: &Rc<InnerClient>) -> Result<Statement, Error
 async fn get_enum_variants(client: &Rc<InnerClient>, oid: Oid) -> Result<Vec<String>, Error> {
     let stmt = typeinfo_enum_statement(client).await?;
 
-    query::query(client, &stmt, &[&oid])
+    Ok(query::query(client, &stmt, &[&oid])
         .await?
-        .and_then(|row| async move { row.try_get(0) })
-        .try_collect()
-        .await
+        .into_iter()
+        .map(|row| row.get(0))
+        .collect())
 }
 
 async fn typeinfo_enum_statement(client: &Rc<InnerClient>) -> Result<Statement, Error> {
@@ -227,10 +227,7 @@ async fn typeinfo_enum_statement(client: &Rc<InnerClient>) -> Result<Statement, 
 async fn get_composite_fields(client: &Rc<InnerClient>, oid: Oid) -> Result<Vec<Field>, Error> {
     let stmt = typeinfo_composite_statement(client).await?;
 
-    let rows = query::query(client, &stmt, &[&oid])
-        .await?
-        .try_collect::<Vec<_>>()
-        .await?;
+    let rows = query::query(client, &stmt, &[&oid]).await?;
 
     let mut fields = vec![];
     for row in rows {

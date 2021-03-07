@@ -65,7 +65,7 @@ where
         config.keepalives_idle,
     )
     .await?;
-    let (mut client, mut connection) = connect_raw(socket, tls, config).await?;
+    let (client, mut connection) = connect_raw(socket, tls, config).await?;
 
     if let TargetSessionAttrs::ReadWrite = config.target_session_attrs {
         let rows = client.simple_query_raw("SHOW transaction_read_only");
@@ -106,14 +106,6 @@ where
             }
         }
     }
-
-    client.set_socket_config(SocketConfig {
-        host: host.clone(),
-        port,
-        connect_timeout: config.connect_timeout,
-        keepalives: config.keepalives,
-        keepalives_idle: config.keepalives_idle,
-    });
 
     Ok((client, connection))
 }

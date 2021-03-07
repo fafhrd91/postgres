@@ -18,6 +18,7 @@ pub enum BackendMessage {
     Async(backend::Message),
 }
 
+#[derive(Debug)]
 pub struct BackendMessages(BytesMut);
 
 impl BackendMessages {

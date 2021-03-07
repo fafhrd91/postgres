@@ -1,7 +1,3 @@
-use crate::client::{InnerClient, Responses};
-use crate::codec::FrontendMessage;
-use crate::connection::RequestMessages;
-use crate::{Error, SimpleQueryMessage, SimpleQueryRow};
 use bytes::Bytes;
 use fallible_iterator::FallibleIterator;
 use futures::{ready, Stream};
@@ -9,21 +5,25 @@ use log::debug;
 use pin_project_lite::pin_project;
 use postgres_protocol::message::backend::Message;
 use postgres_protocol::message::frontend;
+use std::collections::VecDeque;
 use std::marker::PhantomPinned;
 use std::pin::Pin;
 use std::rc::Rc;
 use std::task::{Context, Poll};
 
+use crate::client::{InnerClient, Responses};
+use crate::codec::FrontendMessage;
+use crate::{Error, SimpleQueryMessage, SimpleQueryRow};
+
 pub async fn simple_query(client: &InnerClient, query: &str) -> Result<SimpleQueryStream, Error> {
     debug!("executing simple query: {}", query);
 
     let buf = encode(client, query)?;
-    let responses = client.send(RequestMessages::Single(FrontendMessage::Raw(buf)))?;
+    let messages = client.send(FrontendMessage::Raw(buf))?.receiver.await?;
 
     Ok(SimpleQueryStream {
-        responses,
+        messages,
         columns: None,
-        _p: PhantomPinned,
     })
 }
 
@@ -31,15 +31,19 @@ pub async fn batch_execute(client: &InnerClient, query: &str) -> Result<(), Erro
     debug!("executing statement batch: {}", query);
 
     let buf = encode(client, query)?;
-    let mut responses = client.send(RequestMessages::Single(FrontendMessage::Raw(buf)))?;
+    let mut responses = client
+        .send(FrontendMessage::Raw(buf))?
+        .receiver
+        .await?
+        .into_iter();
 
     loop {
-        match responses.next().await? {
-            Message::ReadyForQuery(_) => return Ok(()),
-            Message::CommandComplete(_)
-            | Message::EmptyQueryResponse
-            | Message::RowDescription(_)
-            | Message::DataRow(_) => {}
+        match responses.next() {
+            Some(Message::ReadyForQuery(_)) => return Ok(()),
+            Some(Message::CommandComplete(_))
+            | Some(Message::EmptyQueryResponse)
+            | Some(Message::RowDescription(_))
+            | Some(Message::DataRow(_)) => {}
             _ => return Err(Error::unexpected_message()),
         }
     }
@@ -52,24 +56,20 @@ fn encode(client: &InnerClient, query: &str) -> Result<Bytes, Error> {
     })
 }
 
-pin_project! {
-    /// A stream of simple query results.
-    pub struct SimpleQueryStream {
-        responses: Responses,
-        columns: Option<Rc<[String]>>,
-        #[pin]
-        _p: PhantomPinned,
-    }
+/// A stream of simple query results.
+pub struct SimpleQueryStream {
+    messages: VecDeque<Message>,
+    columns: Option<Rc<[String]>>,
 }
 
 impl Stream for SimpleQueryStream {
     type Item = Result<SimpleQueryMessage, Error>;
 
-    fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        let this = self.project();
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        let mut this = self.as_mut();
         loop {
-            match ready!(this.responses.poll_next(cx)?) {
-                Message::CommandComplete(body) => {
+            match this.messages.pop_front() {
+                Some(Message::CommandComplete(body)) => {
                     let rows = body
                         .tag()
                         .map_err(Error::parse)?
@@ -80,26 +80,26 @@ impl Stream for SimpleQueryStream {
                         .unwrap_or(0);
                     return Poll::Ready(Some(Ok(SimpleQueryMessage::CommandComplete(rows))));
                 }
-                Message::EmptyQueryResponse => {
+                Some(Message::EmptyQueryResponse) => {
                     return Poll::Ready(Some(Ok(SimpleQueryMessage::CommandComplete(0))));
                 }
-                Message::RowDescription(body) => {
+                Some(Message::RowDescription(body)) => {
                     let columns = body
                         .fields()
                         .map(|f| Ok(f.name().to_string()))
                         .collect::<Vec<_>>()
                         .map_err(Error::parse)?
                         .into();
-                    *this.columns = Some(columns);
+                    this.columns = Some(columns);
                 }
-                Message::DataRow(body) => {
+                Some(Message::DataRow(body)) => {
                     let row = match &this.columns {
                         Some(columns) => SimpleQueryRow::new(columns.clone(), body)?,
                         None => return Poll::Ready(Some(Err(Error::unexpected_message()))),
                     };
                     return Poll::Ready(Some(Ok(SimpleQueryMessage::Row(row))));
                 }
-                Message::ReadyForQuery(_) => return Poll::Ready(None),
+                Some(Message::ReadyForQuery(_)) => return Poll::Ready(None),
                 _ => return Poll::Ready(Some(Err(Error::unexpected_message()))),
             }
         }

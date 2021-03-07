@@ -1,6 +1,4 @@
 use crate::codec::FrontendMessage;
-use crate::connection::RequestMessages;
-use crate::copy_out::CopyOutStream;
 use crate::query::RowStream;
 #[cfg(feature = "runtime")]
 use crate::tls::MakeTlsConnect;
@@ -8,9 +6,7 @@ use crate::tls::TlsConnect;
 use crate::types::{ToSql, Type};
 #[cfg(feature = "runtime")]
 use crate::Socket;
-use crate::{
-    bind, query, Client, CopyInSink, Error, Portal, Row, SimpleQueryMessage, Statement, ToStatement,
-};
+use crate::{bind, query, Client, Error, Portal, Row, SimpleQueryMessage, Statement, ToStatement};
 use bytes::Buf;
 use futures::TryStreamExt;
 use postgres_protocol::message::frontend;
@@ -41,10 +37,7 @@ impl<'a> Drop for Transaction<'a> {
             frontend::query(&query, buf).unwrap();
             buf.split().freeze()
         });
-        let _ = self
-            .client
-            .inner()
-            .send(RequestMessages::Single(FrontendMessage::Raw(buf)));
+        let _ = self.client.inner().send(FrontendMessage::Raw(buf));
     }
 }
 
@@ -196,23 +189,6 @@ impl<'a> Transaction<'a> {
         query::query_portal(self.client.inner(), portal, max_rows).await
     }
 
-    /// Like `Client::copy_in`.
-    pub async fn copy_in<T, U>(&self, statement: &T) -> Result<CopyInSink<U>, Error>
-    where
-        T: ?Sized + ToStatement,
-        U: Buf + 'static,
-    {
-        self.client.copy_in(statement).await
-    }
-
-    /// Like `Client::copy_out`.
-    pub async fn copy_out<T>(&self, statement: &T) -> Result<CopyOutStream, Error>
-    where
-        T: ?Sized + ToStatement,
-    {
-        self.client.copy_out(statement).await
-    }
-
     /// Like `Client::simple_query`.
     pub async fn simple_query(&self, query: &str) -> Result<Vec<SimpleQueryMessage>, Error> {
         self.client.simple_query(query).await
@@ -221,24 +197,6 @@ impl<'a> Transaction<'a> {
     /// Like `Client::batch_execute`.
     pub async fn batch_execute(&self, query: &str) -> Result<(), Error> {
         self.client.batch_execute(query).await
-    }
-
-    /// Like `Client::cancel_query`.
-    #[cfg(feature = "runtime")]
-    pub async fn cancel_query<T>(&self, tls: T) -> Result<(), Error>
-    where
-        T: MakeTlsConnect<Socket>,
-    {
-        self.client.cancel_query(tls).await
-    }
-
-    /// Like `Client::cancel_query_raw`.
-    pub async fn cancel_query_raw<S, T>(&self, stream: S, tls: T) -> Result<(), Error>
-    where
-        S: AsyncRead + AsyncWrite + Unpin,
-        T: TlsConnect<S>,
-    {
-        self.client.cancel_query_raw(stream, tls).await
     }
 
     /// Like `Client::transaction`.

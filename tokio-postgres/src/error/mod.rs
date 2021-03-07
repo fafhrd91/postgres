@@ -1,6 +1,7 @@
 //! Errors.
 
 use fallible_iterator::FallibleIterator;
+use futures::channel::oneshot::Canceled;
 use postgres_protocol::message::backend::{ErrorFields, ErrorResponseBody};
 use std::error::{self, Error as _Error};
 use std::fmt;
@@ -483,5 +484,11 @@ impl Error {
     #[cfg(feature = "runtime")]
     pub(crate) fn connect(e: io::Error) -> Error {
         Error::new(Kind::Connect, Some(Box::new(e)))
+    }
+}
+
+impl From<Canceled> for Error {
+    fn from(_: Canceled) -> Self {
+        Error::closed()
     }
 }

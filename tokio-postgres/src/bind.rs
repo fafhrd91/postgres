@@ -1,6 +1,5 @@
 use crate::client::InnerClient;
 use crate::codec::FrontendMessage;
-use crate::connection::RequestMessages;
 use crate::types::ToSql;
 use crate::{query, Error, Portal, Statement};
 use postgres_protocol::message::backend::Message;
@@ -19,15 +18,14 @@ pub async fn bind(
     let buf = client.with_buf(|buf| {
         query::encode_bind(&statement, params, &name, buf)?;
         frontend::sync(buf);
-        Ok(buf.split().freeze())
+        Ok::<_, Error>(buf.split().freeze())
     })?;
 
-    let mut responses = client.send(RequestMessages::Single(FrontendMessage::Raw(buf)))?;
-
-    match responses.next().await? {
-        Message::BindComplete => {}
-        _ => return Err(Error::unexpected_message()),
+    let responses = client.send(FrontendMessage::Raw(buf))?;
+    let msg = responses.receiver.await?;
+    if let Message::BindComplete = msg[0] {
+        Ok(Portal::new(client, name, statement))
+    } else {
+        Err(Error::unexpected_message())
     }
-
-    Ok(Portal::new(client, name, statement))
 }

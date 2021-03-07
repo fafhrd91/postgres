@@ -1,60 +1,27 @@
 use bytes::{Buf, BytesMut};
 use fallible_iterator::FallibleIterator;
 use futures::{future, pin_mut, ready, StreamExt, TryStreamExt};
-use ntex::channel::mpsc;
+use ntex::channel::{mpsc, pool};
 use ntex::codec::{AsyncRead, AsyncWrite};
 use postgres_protocol::message::backend::Message;
 use std::cell::UnsafeCell;
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::future::Future;
 use std::rc::Rc;
 use std::task::{Context, Poll};
 use std::time::Duration;
 
-#[cfg(feature = "runtime")]
-use crate::cancel_query;
-use crate::codec::BackendMessages;
+use crate::codec::{BackendMessages, FrontendMessage};
 use crate::config::{Host, SslMode};
-use crate::connection::{Request, RequestMessages};
-use crate::copy_out::CopyOutStream;
-use crate::query::RowStream;
-use crate::simple_query::SimpleQueryStream;
-#[cfg(feature = "runtime")]
+use crate::connection::Request;
 use crate::tls::MakeTlsConnect;
 use crate::tls::TlsConnect;
 use crate::to_statement::ToStatement;
 use crate::types::{Oid, ToSql, Type};
-#[cfg(feature = "runtime")]
-use crate::Socket;
-use crate::{cancel_query_raw, copy_in, copy_out, query, CopyInSink, Transaction};
-use crate::{prepare, SimpleQueryMessage};
-use crate::{simple_query, Row};
-use crate::{Error, Statement};
+use crate::{cancel_query_raw, prepare, query, Error, Row, Socket, Statement};
 
 pub struct Responses {
-    receiver: mpsc::Receiver<BackendMessages>,
-    cur: BackendMessages,
-}
-
-impl Responses {
-    pub fn poll_next(&mut self, cx: &mut Context<'_>) -> Poll<Result<Message, Error>> {
-        loop {
-            match self.cur.next().map_err(Error::parse)? {
-                Some(Message::ErrorResponse(body)) => return Poll::Ready(Err(Error::db(body))),
-                Some(message) => return Poll::Ready(Ok(message)),
-                None => {}
-            }
-
-            match ready!(self.receiver.poll_next_unpin(cx)) {
-                Some(messages) => self.cur = messages,
-                None => return Poll::Ready(Err(Error::closed())),
-            }
-        }
-    }
-
-    pub async fn next(&mut self) -> Result<Message, Error> {
-        future::poll_fn(|cx| self.poll_next(cx)).await
-    }
+    pub receiver: pool::Receiver<VecDeque<Message>>,
 }
 
 struct State {
@@ -68,18 +35,16 @@ struct State {
 pub struct InnerClient {
     sender: mpsc::Sender<Request>,
     state: UnsafeCell<State>,
+    pool: pool::Pool<VecDeque<Message>>,
 }
 
 impl InnerClient {
-    pub fn send(&self, messages: RequestMessages) -> Result<Responses, Error> {
-        let (sender, receiver) = mpsc::channel();
+    pub fn send(&self, messages: FrontendMessage) -> Result<Responses, Error> {
+        let (sender, receiver) = self.pool.channel();
         let request = Request { messages, sender };
         self.sender.send(request).map_err(|_| Error::closed())?;
 
-        Ok(Responses {
-            receiver,
-            cur: BackendMessages::empty(),
-        })
+        Ok(Responses { receiver })
     }
 
     fn lock(&self) -> &mut State {
@@ -145,11 +110,6 @@ pub(crate) struct SocketConfig {
 #[derive(Clone)]
 pub struct Client {
     inner: Rc<InnerClient>,
-    // #[cfg(feature = "runtime")]
-    // socket_config: Option<SocketConfig>,
-    // ssl_mode: SslMode,
-    // process_id: i32,
-    // secret_key: i32,
 }
 
 impl Client {
@@ -162,6 +122,7 @@ impl Client {
         Client {
             inner: Rc::new(InnerClient {
                 sender,
+                pool: pool::new(),
                 state: UnsafeCell::new(State {
                     typeinfo: None,
                     typeinfo_composite: None,
@@ -170,21 +131,11 @@ impl Client {
                     buf: BytesMut::new(),
                 }),
             }),
-            //#[cfg(feature = "runtime")]
-            //socket_config: None,
-            //ssl_mode,
-            //process_id,
-            //secret_key,
         }
     }
 
     pub(crate) fn inner(&self) -> &Rc<InnerClient> {
         &self.inner
-    }
-
-    #[cfg(feature = "runtime")]
-    pub(crate) fn set_socket_config(&mut self, socket_config: SocketConfig) {
-        // self.socket_config = Some(socket_config);
     }
 
     /// Creates a new prepared statement.
@@ -219,12 +170,12 @@ impl Client {
     /// # Panics
     ///
     /// Panics if the number of parameters provided does not match the number expected.
-    pub async fn query(
+    pub fn query(
         &self,
         statement: &Statement,
         params: &[&(dyn ToSql)],
-    ) -> Result<Vec<Row>, Error> {
-        self.query_raw(statement, params).await?.try_collect().await
+    ) -> impl Future<Output = Result<Vec<Row>, Error>> {
+        self.query_raw(statement, params)
     }
 
     /// Executes a statement which returns a single row, returning it.
@@ -249,15 +200,14 @@ impl Client {
         let fut = self.query_raw(statement, params);
 
         async move {
-            let stream = fut.await?;
-            pin_mut!(stream);
-
-            let row = match stream.try_next().await? {
-                Some(row) => row,
-                None => return Err(Error::row_count()),
+            let mut iter = fut.await?.into_iter();
+            let row = if let Some(row) = iter.next() {
+                row
+            } else {
+                return Err(Error::row_count());
             };
 
-            if stream.try_next().await?.is_some() {
+            if iter.next().is_some() {
                 return Err(Error::row_count());
             }
 
@@ -284,15 +234,15 @@ impl Client {
         statement: &Statement,
         params: &[&(dyn ToSql)],
     ) -> Result<Option<Row>, Error> {
-        let stream = self.query_raw(statement, params).await?;
-        pin_mut!(stream);
+        let rows = self.query_raw(statement, params).await?;
 
-        let row = match stream.try_next().await? {
+        let mut iter = rows.into_iter();
+        let row = match iter.next() {
             Some(row) => row,
             None => return Ok(None),
         };
 
-        if stream.try_next().await?.is_some() {
+        if iter.next().is_some() {
             return Err(Error::row_count());
         }
 
@@ -317,7 +267,7 @@ impl Client {
         &self,
         statement: &Statement,
         params: &[&(dyn ToSql)],
-    ) -> impl Future<Output = Result<RowStream, Error>> {
+    ) -> impl Future<Output = Result<Vec<Row>, Error>> {
         query::query(&self.inner, statement, params)
     }
 
@@ -364,118 +314,10 @@ impl Client {
         query::execute(self.inner(), statement, params).await
     }
 
-    /// Executes a `COPY FROM STDIN` statement, returning a sink used to write the copy data.
-    ///
-    /// PostgreSQL does not support parameters in `COPY` statements, so this method does not take any. The copy *must*
-    /// be explicitly completed via the `Sink::close` or `finish` methods. If it is not, the copy will be aborted.
-    ///
-    /// # Panics
-    ///
-    /// Panics if the statement contains parameters.
-    pub async fn copy_in<T, U>(&self, statement: &T) -> Result<CopyInSink<U>, Error>
-    where
-        T: ?Sized + ToStatement,
-        U: Buf + 'static,
-    {
-        let statement = statement.__convert().into_statement(self).await?;
-        copy_in::copy_in(self.inner(), statement).await
-    }
-
-    /// Executes a `COPY TO STDOUT` statement, returning a stream of the resulting data.
-    ///
-    /// PostgreSQL does not support parameters in `COPY` statements, so this method does not take any.
-    ///
-    /// # Panics
-    ///
-    /// Panics if the statement contains parameters.
-    pub async fn copy_out<T>(&self, statement: &T) -> Result<CopyOutStream, Error>
-    where
-        T: ?Sized + ToStatement,
-    {
-        let statement = statement.__convert().into_statement(self).await?;
-        copy_out::copy_out(self.inner(), statement).await
-    }
-
-    /// Executes a sequence of SQL statements using the simple query protocol, returning the resulting rows.
-    ///
-    /// Statements should be separated by semicolons. If an error occurs, execution of the sequence will stop at that
-    /// point. The simple query protocol returns the values in rows as strings rather than in their binary encodings,
-    /// so the associated row type doesn't work with the `FromSql` trait. Rather than simply returning a list of the
-    /// rows, this method returns a list of an enum which indicates either the completion of one of the commands,
-    /// or a row of data. This preserves the framing between the separate statements in the request.
-    ///
-    /// # Warning
-    ///
-    /// Prepared statements should be use for any query which contains user-specified data, as they provided the
-    /// functionality to safely embed that data in the request. Do not form statements via string concatenation and pass
-    /// them to this method!
-    pub async fn simple_query(&self, query: &str) -> Result<Vec<SimpleQueryMessage>, Error> {
-        self.simple_query_raw(query).await?.try_collect().await
-    }
-
-    pub(crate) async fn simple_query_raw(&self, query: &str) -> Result<SimpleQueryStream, Error> {
-        simple_query::simple_query(self.inner(), query).await
-    }
-
-    /// Executes a sequence of SQL statements using the simple query protocol.
-    ///
-    /// Statements should be separated by semicolons. If an error occurs, execution of the sequence will stop at that
-    /// point. This is intended for use when, for example, initializing a database schema.
-    ///
-    /// # Warning
-    ///
-    /// Prepared statements should be use for any query which contains user-specified data, as they provided the
-    /// functionality to safely embed that data in the request. Do not form statements via string concatenation and pass
-    /// them to this method!
-    pub async fn batch_execute(&self, query: &str) -> Result<(), Error> {
-        simple_query::batch_execute(self.inner(), query).await
-    }
-
-    /// Begins a new database transaction.
-    ///
-    /// The transaction will roll back by default - use the `commit` method to commit it.
-    pub async fn transaction(&mut self) -> Result<Transaction<'_>, Error> {
-        self.batch_execute("BEGIN").await?;
-        Ok(Transaction::new(self))
-    }
-
-    /// Attempts to cancel an in-progress query.
-    ///
-    /// The server provides no information about whether a cancellation attempt was successful or not. An error will
-    /// only be returned if the client was unable to connect to the database.
-    ///
-    /// Requires the `runtime` Cargo feature (enabled by default).
-    #[cfg(feature = "runtime")]
-    pub async fn cancel_query<T>(&self, _tls: T) -> Result<(), Error>
-    where
-        T: MakeTlsConnect<Socket>,
-    {
-        // cancel_query::cancel_query(
-        //     self.socket_config.clone(),
-        //     self.ssl_mode,
-        //     tls,
-        //     self.process_id,
-        //     self.secret_key,
-        // )
-        // .await
-        Ok(())
-    }
-
-    /// Like `cancel_query`, but uses a stream which is already connected to the server rather than opening a new
-    /// connection itself.
-    pub async fn cancel_query_raw<S, T>(&self, _stream: S, _tls: T) -> Result<(), Error>
-    where
-        S: AsyncRead + AsyncWrite + Unpin,
-        T: TlsConnect<S>,
-    {
-        // cancel_query_raw::cancel_query_raw(
-        //     stream,
-        //     self.ssl_mode,
-        //     tls,
-        //     self.process_id,
-        //     self.secret_key,
-        // )
-        // .await
-        Ok(())
+    pub(crate) async fn simple_query_raw(
+        &self,
+        query: &str,
+    ) -> Result<crate::SimpleQueryStream, Error> {
+        crate::simple_query::simple_query(self.inner(), query).await
     }
 }

@@ -1,6 +1,5 @@
 use crate::client::InnerClient;
 use crate::codec::FrontendMessage;
-use crate::connection::RequestMessages;
 use crate::types::Type;
 use postgres_protocol::message::frontend;
 use std::rc::{Rc, Weak};
@@ -20,7 +19,7 @@ impl Drop for StatementInner {
                 frontend::sync(buf);
                 buf.split().freeze()
             });
-            let _ = client.send(RequestMessages::Single(FrontendMessage::Raw(buf)));
+            let _ = client.send(FrontendMessage::Raw(buf));
         }
     }
 }

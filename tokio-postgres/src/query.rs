@@ -1,41 +1,51 @@
-use crate::client::{InnerClient, Responses};
-use crate::codec::FrontendMessage;
-use crate::connection::RequestMessages;
-use crate::types::{IsNull, ToSql};
-use crate::{Error, Portal, Row, Statement};
 use bytes::{Bytes, BytesMut};
 use futures::future::{err, Either};
 use futures::{ready, Future, Stream};
 use postgres_protocol::message::backend::Message;
 use postgres_protocol::message::frontend;
-use std::pin::Pin;
 use std::task::{Context, Poll};
+use std::{collections::VecDeque, pin::Pin};
+
+use crate::client::{InnerClient, Responses};
+use crate::codec::FrontendMessage;
+use crate::types::{IsNull, ToSql};
+use crate::{Error, Portal, Row, Statement};
 
 pub fn query(
     client: &InnerClient,
     statement: &Statement,
     params: &[&(dyn ToSql)],
-) -> impl Future<Output = Result<RowStream, Error>> {
+) -> impl Future<Output = Result<Vec<Row>, Error>> {
     let buf = match encode(client, statement, params) {
         Ok(buf) => buf,
         Err(e) => return Either::Left(err(e)),
     };
 
     let statement = statement.clone();
-    let mut responses = match client.send(RequestMessages::Single(FrontendMessage::Raw(buf))) {
+    let responses = match client.send(FrontendMessage::Raw(buf)) {
         Ok(responses) => responses,
         Err(e) => return Either::Left(err(e)),
     };
 
     Either::Right(async move {
-        match responses.next().await? {
-            Message::BindComplete => {}
-            _ => return Err(Error::unexpected_message()),
+        let mut messages = responses.receiver.await?;
+        if let Message::BindComplete = messages[0] {
+            let mut rows = Vec::with_capacity(messages.len() - 1);
+            messages.pop_front();
+            for msg in messages {
+                match msg {
+                    Message::DataRow(body) => rows.push(Row::new(statement.clone(), body)?),
+                    Message::EmptyQueryResponse
+                    | Message::CommandComplete(_)
+                    | Message::PortalSuspended => break,
+                    Message::ErrorResponse(body) => return Err(Error::db(body)),
+                    _ => return Err(Error::unexpected_message()),
+                }
+            }
+            Ok(rows)
+        } else {
+            Err(Error::unexpected_message())
         }
-        Ok(RowStream {
-            statement,
-            responses,
-        })
     })
 }
 
@@ -43,19 +53,29 @@ pub async fn query_portal(
     client: &InnerClient,
     portal: &Portal,
     max_rows: i32,
-) -> Result<RowStream, Error> {
+) -> Result<Vec<Row>, Error> {
     let buf = client.with_buf(|buf| {
-        frontend::execute(portal.name(), max_rows, buf).map_err(Error::encode)?;
+        frontend::execute(portal.name(), max_rows, buf).map_err(|e| Error::encode(e))?;
         frontend::sync(buf);
-        Ok(buf.split().freeze())
+        Ok::<_, Error>(buf.split().freeze())
     })?;
 
-    let responses = client.send(RequestMessages::Single(FrontendMessage::Raw(buf)))?;
+    let statement = portal.statement().clone();
+    let responses = client.send(FrontendMessage::Raw(buf))?;
 
-    Ok(RowStream {
-        statement: portal.statement().clone(),
-        responses,
-    })
+    let messages = responses.receiver.await?;
+    let mut rows = Vec::with_capacity(messages.len());
+    for msg in messages {
+        match msg {
+            Message::DataRow(body) => rows.push(Row::new(statement.clone(), body)?),
+            Message::EmptyQueryResponse
+            | Message::CommandComplete(_)
+            | Message::PortalSuspended => break,
+            Message::ErrorResponse(body) => return Err(Error::db(body)),
+            _ => return Err(Error::unexpected_message()),
+        }
+    }
+    Ok(rows)
 }
 
 pub async fn execute(
@@ -64,10 +84,11 @@ pub async fn execute(
     params: &[&(dyn ToSql)],
 ) -> Result<u64, Error> {
     let buf = encode(client, &statement, params)?;
-    let mut responses = start(client, buf).await?;
+    let statement = statement.clone();
+    let messages = start(client, buf).await?;
 
-    loop {
-        match responses.next().await? {
+    for msg in messages {
+        match msg {
             Message::DataRow(_) => {}
             Message::CommandComplete(body) => {
                 let rows = body
@@ -84,17 +105,18 @@ pub async fn execute(
             _ => return Err(Error::unexpected_message()),
         }
     }
+    Err(Error::unexpected_message())
 }
 
-async fn start(client: &InnerClient, buf: Bytes) -> Result<Responses, Error> {
-    let mut responses = client.send(RequestMessages::Single(FrontendMessage::Raw(buf)))?;
+async fn start(client: &InnerClient, buf: Bytes) -> Result<VecDeque<Message>, Error> {
+    let mut messages = client.send(FrontendMessage::Raw(buf))?.receiver.await?;
 
-    match responses.next().await? {
-        Message::BindComplete => {}
-        _ => return Err(Error::unexpected_message()),
+    if let Message::BindComplete = messages[0] {
+        messages.pop_front();
+        Ok(messages)
+    } else {
+        Err(Error::unexpected_message())
     }
-
-    Ok(responses)
 }
 
 pub fn encode(
@@ -139,28 +161,5 @@ pub fn encode_bind(
         Ok(()) => Ok(()),
         Err(frontend::BindError::Conversion(e)) => Err(Error::to_sql(e, error_idx)),
         Err(frontend::BindError::Serialization(e)) => Err(Error::encode(e)),
-    }
-}
-
-/// A stream of table rows.
-pub struct RowStream {
-    statement: Statement,
-    responses: Responses,
-}
-
-impl Stream for RowStream {
-    type Item = Result<Row, Error>;
-
-    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        match ready!(self.responses.poll_next(cx)?) {
-            Message::DataRow(body) => {
-                Poll::Ready(Some(Ok(Row::new(self.statement.clone(), body)?)))
-            }
-            Message::EmptyQueryResponse
-            | Message::CommandComplete(_)
-            | Message::PortalSuspended => Poll::Ready(None),
-            Message::ErrorResponse(body) => Poll::Ready(Some(Err(Error::db(body)))),
-            _ => Poll::Ready(Some(Err(Error::unexpected_message()))),
-        }
     }
 }

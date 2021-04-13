@@ -2,6 +2,7 @@
 
 use fallible_iterator::FallibleIterator;
 use futures::channel::oneshot::Canceled;
+use ntex::channel::Canceled as NtexCanceled;
 use postgres_protocol::message::backend::{ErrorFields, ErrorResponseBody};
 use std::error::{self, Error as _Error};
 use std::fmt;
@@ -489,6 +490,12 @@ impl Error {
 
 impl From<Canceled> for Error {
     fn from(_: Canceled) -> Self {
+        Error::closed()
+    }
+}
+
+impl From<NtexCanceled> for Error {
+    fn from(_: NtexCanceled) -> Self {
         Error::closed()
     }
 }

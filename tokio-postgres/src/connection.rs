@@ -62,10 +62,7 @@ impl Connection {
         T: AsyncRead + AsyncWrite + Unpin + 'static,
     {
         let (stream, codec, io) = IoState::from_framed(stream);
-        let io = io
-            .low_watermark(1024)
-            .read_high_watermark(65535)
-            .write_high_watermark(65535);
+        io.set_buffer_params(65535, 65535, 1024);
 
         let stream = Rc::new(RefCell::new(stream));
         ntex::rt::spawn(ReadTask::new(stream.clone(), io.clone()));
@@ -88,11 +85,13 @@ impl Connection {
             return Ok(false);
         }
 
+        let read = self.io.read();
+
         loop {
-            let message = match self.io.decode_item(&self.codec).map_err(|e| Error::io(e))? {
+            let message = match read.decode(&self.codec).map_err(|e| Error::io(e))? {
                 Some(message) => message,
                 None => {
-                    self.io.dsp_read_more_data(cx.waker());
+                    read.wake(cx.waker());
                     return Ok(true);
                 }
             };
@@ -128,32 +127,30 @@ impl Connection {
         }
     }
 
-    fn poll_request(&mut self, cx: &mut Context<'_>) -> Poll<Option<FrontendMessage>> {
-        match self.receiver.poll_next_unpin(cx) {
-            Poll::Ready(Some(request)) => {
-                trace!("polled new request");
-                self.responses.push_back(Response {
-                    sender: request.sender,
-                });
-                Poll::Ready(Some(request.messages))
-            }
-            Poll::Ready(None) => Poll::Ready(None),
-            Poll::Pending => Poll::Pending,
-        }
-    }
-
     fn poll_write(&mut self, cx: &mut Context<'_>) -> Result<(), Error> {
         if self.state == State::Closing {
             self.io.shutdown_io();
             return Ok(());
         }
 
+        let write = self.io.write();
+
         loop {
-            match self.poll_request(cx) {
+            let result = match self.receiver.poll_next_unpin(cx) {
                 Poll::Ready(Some(request)) => {
-                    self.io
-                        .write_item(request, &self.codec)
-                        .map_err(Error::io)?;
+                    trace!("polled new request");
+                    self.responses.push_back(Response {
+                        sender: request.sender,
+                    });
+                    Poll::Ready(Some(request.messages))
+                }
+                Poll::Ready(None) => Poll::Ready(None),
+                Poll::Pending => Poll::Pending,
+            };
+
+            match result {
+                Poll::Ready(Some(request)) => {
+                    write.encode(request, &self.codec).map_err(Error::io)?;
                     if self.state == State::Terminating {
                         trace!("poll_write: sent eof, closing");
                         self.state = State::Closing;
@@ -166,8 +163,8 @@ impl Connection {
                     self.state = State::Terminating;
                     let mut request = BytesMut::new();
                     frontend::terminate(&mut request);
-                    self.io
-                        .write_item(FrontendMessage::Raw(request.freeze()), &self.codec)
+                    write
+                        .encode(FrontendMessage::Raw(request.freeze()), &self.codec)
                         .map_err(Error::io)?;
                     self.state = State::Closing;
                 }
@@ -205,7 +202,7 @@ impl Future for Connection {
     type Output = Result<(), Error>;
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Error>> {
-        if self.io.is_dsp_stopped() {
+        if self.io.is_dispatcher_stopped() {
             return Poll::Ready(Ok(()));
         }
 

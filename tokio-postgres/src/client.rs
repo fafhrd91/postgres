@@ -2,7 +2,6 @@ use bytes::{Buf, BytesMut};
 use fallible_iterator::FallibleIterator;
 use futures::{future, pin_mut, ready, StreamExt, TryStreamExt};
 use ntex::channel::{mpsc, pool};
-use ntex::codec::{AsyncRead, AsyncWrite};
 use postgres_protocol::message::backend::Message;
 use std::cell::UnsafeCell;
 use std::collections::{HashMap, VecDeque};

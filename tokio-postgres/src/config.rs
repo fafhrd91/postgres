@@ -22,6 +22,8 @@ use std::time::Duration;
 use std::{error, fmt, iter, mem};
 use tokio::io::{AsyncRead, AsyncWrite};
 
+use ntex::io::Io;
+
 /// Properties required of a session.
 #[derive(Debug, Copy, Clone, PartialEq)]
 #[non_exhaustive]
@@ -413,22 +415,15 @@ impl Config {
     ///
     /// Requires the `runtime` Cargo feature (enabled by default).
     #[cfg(feature = "runtime")]
-    pub async fn connect<T>(&self, tls: T) -> Result<(Client, Connection), Error>
-    where
-        T: MakeTlsConnect<Socket> + 'static,
-    {
-        connect(tls, self).await
+    pub async fn connect(&self) -> Result<(Client, Connection), Error> {
+        connect(self).await
     }
 
     /// Connects to a PostgreSQL database over an arbitrary stream.
     ///
     /// All of the settings other than `user`, `password`, `dbname`, `options`, and `application_name` name are ignored.
-    pub async fn connect_raw<S, T>(&self, stream: S, tls: T) -> Result<(Client, Connection), Error>
-    where
-        S: AsyncRead + AsyncWrite + Unpin + 'static,
-        T: TlsConnect<S> + 'static,
-    {
-        connect_raw(stream, tls, self).await
+    pub async fn connect_raw(&self, stream: Io) -> Result<(Client, Connection), Error> {
+        connect_raw(stream, self).await
     }
 }
 

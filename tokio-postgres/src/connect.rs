@@ -1,17 +1,16 @@
+use futures::{future, pin_mut, Future, FutureExt, Stream};
+use std::{io, task::Poll};
+
+use ntex::io::Io;
+
 use crate::client::SocketConfig;
 use crate::config::{Host, TargetSessionAttrs};
 use crate::connect_raw::connect_raw;
 use crate::connect_socket::connect_socket;
 use crate::tls::{MakeTlsConnect, TlsConnect};
 use crate::{Client, Config, Connection, Error, SimpleQueryMessage, Socket};
-use futures::{future, pin_mut, Future, FutureExt, Stream};
-use std::io;
-use std::task::Poll;
 
-pub async fn connect<T>(mut tls: T, config: &Config) -> Result<(Client, Connection), Error>
-where
-    T: MakeTlsConnect<Socket> + 'static,
-{
+pub async fn connect(config: &Config) -> Result<(Client, Connection), Error> {
     if config.host.is_empty() {
         return Err(Error::config("host missing".into()));
     }
@@ -35,11 +34,7 @@ where
             Host::Unix(_) => "",
         };
 
-        let tls = tls
-            .make_tls_connect(hostname)
-            .map_err(|e| Error::tls(e.into()))?;
-
-        match connect_once(host, port, tls, config).await {
+        match connect_once(host, port, config).await {
             Ok((client, connection)) => return Ok((client, connection)),
             Err(e) => error = Some(e),
         }
@@ -48,15 +43,11 @@ where
     Err(error.unwrap())
 }
 
-async fn connect_once<T>(
+async fn connect_once(
     host: &Host,
     port: u16,
-    tls: T,
     config: &Config,
-) -> Result<(Client, Connection), Error>
-where
-    T: TlsConnect<Socket> + 'static,
-{
+) -> Result<(Client, Connection), Error> {
     let socket = connect_socket(
         host,
         port,
@@ -65,7 +56,7 @@ where
         config.keepalives_idle,
     )
     .await?;
-    let (client, mut connection) = connect_raw(socket, tls, config).await?;
+    let (client, mut connection) = connect_raw(socket, config).await?;
 
     if let TargetSessionAttrs::ReadWrite = config.target_session_attrs {
         let rows = client.simple_query_raw("SHOW transaction_read_only");

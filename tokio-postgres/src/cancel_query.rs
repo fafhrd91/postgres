@@ -4,16 +4,12 @@ use crate::tls::MakeTlsConnect;
 use crate::{cancel_query_raw, connect_socket, Error, Socket};
 use std::io;
 
-pub(crate) async fn cancel_query<T>(
+pub(crate) async fn cancel_query(
     config: Option<SocketConfig>,
     ssl_mode: SslMode,
-    mut tls: T,
     process_id: i32,
     secret_key: i32,
-) -> Result<(), Error>
-where
-    T: MakeTlsConnect<Socket>,
-{
+) -> Result<(), Error> {
     let config = match config {
         Some(config) => config,
         None => {
@@ -30,9 +26,6 @@ where
         #[cfg(unix)]
         Host::Unix(_) => "",
     };
-    let tls = tls
-        .make_tls_connect(hostname)
-        .map_err(|e| Error::tls(e.into()))?;
 
     let socket = connect_socket::connect_socket(
         &config.host,
@@ -43,5 +36,5 @@ where
     )
     .await?;
 
-    cancel_query_raw::cancel_query_raw(socket, ssl_mode, tls, process_id, secret_key).await
+    cancel_query_raw::cancel_query_raw(socket, ssl_mode, process_id, secret_key).await
 }

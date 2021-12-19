@@ -35,9 +35,9 @@ with-serde_json-1 = ["postgres-types/with-serde_json-1"]
 with-uuid-0_8 = ["postgres-types/with-uuid-0_8"]
 
 [dependencies]
-ntex = "0.4.0-b.1"
-bytes = { version = "0.1.1", package = "ntex-bytes" }
-byteorder = "1.2"
+ntex = "0.5.0-b.0"
+bytes = { version = "0.1.8", package = "ntex-bytes" }
+byteorder = "1.4"
 fallible-iterator = "0.2"
 futures = "0.3.13"
 log = "0.4"

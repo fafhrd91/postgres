@@ -6,9 +6,9 @@ use bytes::BytesMut;
 use fallible_iterator::FallibleIterator;
 use futures::{ready, Sink, Stream, StreamExt};
 use log::trace;
+
 use ntex::channel::{mpsc, pool};
-use ntex::codec::{AsyncRead, AsyncWrite, Framed};
-use ntex::framed::{ReadTask, State as IoState, WriteTask};
+use ntex::io::{Filter, Io};
 
 use postgres_protocol::message::backend::Message;
 use postgres_protocol::message::frontend;
@@ -42,8 +42,7 @@ enum State {
 /// occurred, or because its associated `Client` has dropped and all outstanding work has completed.
 #[must_use = "futures do nothing unless polled"]
 pub struct Connection {
-    io: IoState,
-    codec: PostgresCodec,
+    io: Io,
     parameters: HashMap<String, String>,
     receiver: mpsc::Receiver<Request>,
     responses: VecDeque<Response>,
@@ -52,25 +51,13 @@ pub struct Connection {
 }
 
 impl Connection {
-    pub(crate) fn new<S, T>(
-        stream: Framed<MaybeTlsStream<S, T>, PostgresCodec>,
+    pub(crate) fn new(
+        io: Io,
         parameters: HashMap<String, String>,
         receiver: mpsc::Receiver<Request>,
-    ) -> Connection
-    where
-        S: AsyncRead + AsyncWrite + Unpin + 'static,
-        T: AsyncRead + AsyncWrite + Unpin + 'static,
-    {
-        let (stream, codec, io) = IoState::from_framed(stream);
-        io.set_buffer_params(65535, 65535, 1024);
-
-        let stream = Rc::new(RefCell::new(stream));
-        ntex::rt::spawn(ReadTask::new(stream.clone(), io.clone()));
-        ntex::rt::spawn(WriteTask::new(stream, io.clone()));
-
+    ) -> Connection {
         Connection {
             io,
-            codec,
             parameters,
             receiver,
             responses: VecDeque::new(),
@@ -88,10 +75,10 @@ impl Connection {
         let read = self.io.read();
 
         loop {
-            let message = match read.decode(&self.codec).map_err(|e| Error::io(e))? {
+            let message = match read.decode(&PostgresCodec)? {
                 Some(message) => message,
                 None => {
-                    read.wake(cx.waker());
+                    let _ = read.poll_read_ready(cx);
                     return Ok(true);
                 }
             };
@@ -129,7 +116,7 @@ impl Connection {
 
     fn poll_write(&mut self, cx: &mut Context<'_>) -> Result<(), Error> {
         if self.state == State::Closing {
-            self.io.shutdown_io();
+            let _ = self.io.poll_shutdown(cx);
             return Ok(());
         }
 
@@ -150,7 +137,7 @@ impl Connection {
 
             match result {
                 Poll::Ready(Some(request)) => {
-                    write.encode(request, &self.codec).map_err(Error::io)?;
+                    write.encode(request, &PostgresCodec).map_err(Error::io)?;
                     if self.state == State::Terminating {
                         trace!("poll_write: sent eof, closing");
                         self.state = State::Closing;
@@ -164,7 +151,7 @@ impl Connection {
                     let mut request = BytesMut::new();
                     frontend::terminate(&mut request);
                     write
-                        .encode(FrontendMessage::Raw(request.freeze()), &self.codec)
+                        .encode(FrontendMessage::Raw(request.freeze()), &PostgresCodec)
                         .map_err(Error::io)?;
                     self.state = State::Closing;
                 }
@@ -185,10 +172,11 @@ impl Connection {
     }
 
     fn poll_shutdown(&mut self, cx: &mut Context<'_>) -> Poll<Result<(), Error>> {
-        if self.state != State::Closing {
-            return Poll::Pending;
+        if !self.io.poll_shutdown(cx)?.is_ready() {
+            if self.state != State::Closing {
+                return Poll::Pending;
+            }
         }
-        self.io.shutdown_io();
         Poll::Ready(Ok(()))
     }
 

@@ -9,6 +9,7 @@ use log::trace;
 
 use ntex::channel::{mpsc, pool};
 use ntex::io::{Filter, Io};
+use ntex::util::Either;
 
 use postgres_protocol::message::backend::Message;
 use postgres_protocol::message::frontend;
@@ -72,15 +73,13 @@ impl Connection {
             return Ok(false);
         }
 
-        let read = self.io.read();
-
         loop {
-            let message = match read.decode(&PostgresCodec)? {
-                Some(message) => message,
-                None => {
-                    let _ = read.poll_read_ready(cx);
-                    return Ok(true);
-                }
+            let message = match self.io.poll_read_next(&PostgresCodec, cx) {
+                Poll::Ready(Some(Ok(message))) => message,
+                Poll::Ready(Some(Err(Either::Left(e)))) => return Err(e.into()),
+                Poll::Ready(Some(Err(Either::Right(e)))) => return Err(e.into()),
+                Poll::Ready(None) => return Ok(false),
+                Poll::Pending => return Ok(true),
             };
 
             let (mut messages, request_complete) = match message {
@@ -120,8 +119,6 @@ impl Connection {
             return Ok(());
         }
 
-        let write = self.io.write();
-
         loop {
             let result = match self.receiver.poll_next_unpin(cx) {
                 Poll::Ready(Some(request)) => {
@@ -137,7 +134,7 @@ impl Connection {
 
             match result {
                 Poll::Ready(Some(request)) => {
-                    write.encode(request, &PostgresCodec).map_err(Error::io)?;
+                    self.io.encode(request, &PostgresCodec).map_err(Error::io)?;
                     if self.state == State::Terminating {
                         trace!("poll_write: sent eof, closing");
                         self.state = State::Closing;
@@ -150,7 +147,7 @@ impl Connection {
                     self.state = State::Terminating;
                     let mut request = BytesMut::new();
                     frontend::terminate(&mut request);
-                    write
+                    self.io
                         .encode(FrontendMessage::Raw(request.freeze()), &PostgresCodec)
                         .map_err(Error::io)?;
                     self.state = State::Closing;

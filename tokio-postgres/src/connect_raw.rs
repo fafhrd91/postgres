@@ -35,11 +35,11 @@ impl Stream for StartupStream {
                 Err(e) => return Poll::Ready(Some(Err(e))),
             }
 
-            match ready!(self.io.poll_next(&PostgresCodec, cx)) {
-                Ok(Some(BackendMessage::Normal { messages, .. })) => self.buf = messages,
-                Ok(Some(BackendMessage::Async(message))) => return Poll::Ready(Some(Ok(message))),
-                Ok(None) => return Poll::Ready(None),
-                Err(e) => return Poll::Ready(Some(Err(e.into_inner()))),
+            match ready!(self.io.poll_read_next(&PostgresCodec, cx)) {
+                Some(Ok(BackendMessage::Normal { messages, .. })) => self.buf = messages,
+                Some(Ok(BackendMessage::Async(message))) => return Poll::Ready(Some(Ok(message))),
+                None => return Poll::Ready(None),
+                Some(Err(e)) => return Poll::Ready(Some(Err(e.into_inner()))),
             }
         }
     }

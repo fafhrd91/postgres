@@ -2,7 +2,7 @@ use std::{collections::HashMap, io, pin::Pin, task::Context, task::Poll};
 
 use fallible_iterator::FallibleIterator;
 use futures::{ready, Sink, SinkExt, Stream, StreamExt, TryStreamExt};
-use ntex::{channel::mpsc, io::Io, util::poll_fn, util::BytesMut};
+use ntex::{channel::mpsc, io::Io, io::RecvError, util::poll_fn, util::BytesMut};
 use postgres_protocol::authentication;
 use postgres_protocol::authentication::sasl;
 use postgres_protocol::authentication::sasl::ScramSha256;
@@ -35,11 +35,13 @@ impl Stream for StartupStream {
                 Err(e) => return Poll::Ready(Some(Err(e))),
             }
 
-            match ready!(self.io.poll_read_next(&PostgresCodec, cx)) {
-                Some(Ok(BackendMessage::Normal { messages, .. })) => self.buf = messages,
-                Some(Ok(BackendMessage::Async(message))) => return Poll::Ready(Some(Ok(message))),
-                None => return Poll::Ready(None),
-                Some(Err(e)) => return Poll::Ready(Some(Err(e.into_inner()))),
+            match ready!(self.io.poll_recv(&PostgresCodec, cx)) {
+                Ok(BackendMessage::Normal { messages, .. }) => self.buf = messages,
+                Ok(BackendMessage::Async(message)) => return Poll::Ready(Some(Ok(message))),
+                Err(RecvError::PeerGone(_)) => return Poll::Ready(None),
+                Err(e) => {
+                    return Poll::Ready(Some(Err(io::Error::new(io::ErrorKind::Other, "error"))))
+                }
             }
         }
     }

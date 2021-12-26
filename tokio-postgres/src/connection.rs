@@ -8,7 +8,7 @@ use futures::{ready, Sink, Stream, StreamExt};
 use log::trace;
 
 use ntex::channel::{mpsc, pool};
-use ntex::io::{Filter, Io};
+use ntex::io::{Filter, Io, RecvError};
 use ntex::util::Either;
 
 use postgres_protocol::message::backend::Message;
@@ -74,11 +74,18 @@ impl Connection {
         }
 
         loop {
-            let message = match self.io.poll_read_next(&PostgresCodec, cx) {
-                Poll::Ready(Some(Ok(message))) => message,
-                Poll::Ready(Some(Err(Either::Left(e)))) => return Err(e.into()),
-                Poll::Ready(Some(Err(Either::Right(e)))) => return Err(e.into()),
-                Poll::Ready(None) => return Ok(false),
+            let message = match self.io.poll_recv(&PostgresCodec, cx) {
+                Poll::Ready(Ok(message)) => message,
+                Poll::Ready(Err(RecvError::Stop)) => return Ok(false),
+                Poll::Ready(Err(RecvError::PeerGone(None))) => return Ok(false),
+                Poll::Ready(Err(RecvError::PeerGone(Some(e)))) => return Err(e.into()),
+                Poll::Ready(Err(RecvError::WriteBackpressure)) => {
+                    if self.io.poll_flush(cx, false).is_pending() {
+                        return Ok(true);
+                    }
+                    continue;
+                }
+                Poll::Ready(Err(_)) => return Ok(false),
                 Poll::Pending => return Ok(true),
             };
 

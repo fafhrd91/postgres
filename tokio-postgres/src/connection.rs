@@ -194,10 +194,6 @@ impl Future for Connection {
     type Output = Result<(), Error>;
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Error>> {
-        if self.io.is_dispatcher_stopped() {
-            return Poll::Ready(Ok(()));
-        }
-
         let active = self.poll_read(cx)?;
         let _ = self.poll_write(cx)?;
 

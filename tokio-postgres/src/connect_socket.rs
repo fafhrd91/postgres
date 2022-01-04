@@ -12,8 +12,8 @@ pub(crate) async fn connect_socket(
     keepalives: bool,
     keepalives_idle: Duration,
 ) -> Result<Io, Error> {
-    PoolId::P10.set_read_params(65535, 1024);
-    PoolId::P10.set_write_params(65535, 1024);
+    PoolId::P10.set_read_params(65535, 8192);
+    PoolId::P10.set_write_params(65535, 8192);
 
     match host {
         Host::Tcp(host) => {

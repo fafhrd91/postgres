@@ -102,14 +102,32 @@ impl Connection {
                 }
             };
 
-            while let Some(item) = messages.next().map_err(Error::parse)? {
-                if let Message::ErrorResponse(body) = item {
-                    return Err(Error::db(body));
+            loop {
+                if let Some(item) = messages.next().map_err(Error::parse)? {
+                    if let Message::ErrorResponse(body) = item {
+                        return Err(Error::db(body));
+                    }
+                    if matches!(item, Message::ReadyForQuery(_)) {
+                        continue;
+                    }
+
+                    let complete = matches!(item, Message::CommandComplete(_));
+                    self.messages.push_back(item);
+
+                    if complete {
+                        let response = match self.responses.pop_front() {
+                            Some(response) => response,
+                            None => return Err(Error::unexpected_message()),
+                        };
+
+                        let _ = response.sender.send(mem::take(&mut self.messages));
+                    }
+                } else {
+                    break;
                 }
-                self.messages.push_back(item);
             }
 
-            if request_complete {
+            if request_complete && !self.messages.is_empty() {
                 let response = match self.responses.pop_front() {
                     Some(response) => response,
                     None => return Err(Error::unexpected_message()),

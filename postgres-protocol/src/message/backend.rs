@@ -72,6 +72,7 @@ impl Header {
 }
 
 /// An enum representing Postgres backend messages.
+#[derive(Debug)]
 #[non_exhaustive]
 pub enum Message {
     AuthenticationCleartextPassword,
@@ -333,6 +334,7 @@ impl Read for Buffer {
     }
 }
 
+#[derive(Debug)]
 pub struct AuthenticationMd5PasswordBody {
     salt: [u8; 4],
 }
@@ -344,6 +346,7 @@ impl AuthenticationMd5PasswordBody {
     }
 }
 
+#[derive(Debug)]
 pub struct AuthenticationGssContinueBody(Bytes);
 
 impl AuthenticationGssContinueBody {
@@ -353,6 +356,7 @@ impl AuthenticationGssContinueBody {
     }
 }
 
+#[derive(Debug)]
 pub struct AuthenticationSaslBody(Bytes);
 
 impl AuthenticationSaslBody {
@@ -362,6 +366,7 @@ impl AuthenticationSaslBody {
     }
 }
 
+#[derive(Debug)]
 pub struct SaslMechanisms<'a>(&'a [u8]);
 
 impl<'a> FallibleIterator for SaslMechanisms<'a> {
@@ -387,6 +392,7 @@ impl<'a> FallibleIterator for SaslMechanisms<'a> {
     }
 }
 
+#[derive(Debug)]
 pub struct AuthenticationSaslContinueBody(Bytes);
 
 impl AuthenticationSaslContinueBody {
@@ -396,6 +402,7 @@ impl AuthenticationSaslContinueBody {
     }
 }
 
+#[derive(Debug)]
 pub struct AuthenticationSaslFinalBody(Bytes);
 
 impl AuthenticationSaslFinalBody {
@@ -405,6 +412,7 @@ impl AuthenticationSaslFinalBody {
     }
 }
 
+#[derive(Debug)]
 pub struct BackendKeyDataBody {
     process_id: i32,
     secret_key: i32,
@@ -422,6 +430,7 @@ impl BackendKeyDataBody {
     }
 }
 
+#[derive(Debug)]
 pub struct CommandCompleteBody {
     tag: Bytes,
 }
@@ -433,6 +442,7 @@ impl CommandCompleteBody {
     }
 }
 
+#[derive(Debug)]
 pub struct CopyDataBody {
     storage: Bytes,
 }
@@ -449,6 +459,7 @@ impl CopyDataBody {
     }
 }
 
+#[derive(Debug)]
 pub struct CopyInResponseBody {
     storage: Bytes,
     len: u16,
@@ -470,6 +481,7 @@ impl CopyInResponseBody {
     }
 }
 
+#[derive(Debug)]
 pub struct ColumnFormats<'a> {
     buf: &'a [u8],
     remaining: u16,
@@ -503,6 +515,7 @@ impl<'a> FallibleIterator for ColumnFormats<'a> {
     }
 }
 
+#[derive(Debug)]
 pub struct CopyOutResponseBody {
     storage: Bytes,
     len: u16,
@@ -524,6 +537,7 @@ impl CopyOutResponseBody {
     }
 }
 
+#[derive(Debug)]
 pub struct DataRowBody {
     storage: Bytes,
     len: u16,
@@ -545,6 +559,7 @@ impl DataRowBody {
     }
 }
 
+#[derive(Debug)]
 pub struct DataRowRanges<'a> {
     buf: &'a [u8],
     len: usize,
@@ -593,6 +608,7 @@ impl<'a> FallibleIterator for DataRowRanges<'a> {
     }
 }
 
+#[derive(Debug)]
 pub struct ErrorResponseBody {
     storage: Bytes,
 }
@@ -604,6 +620,7 @@ impl ErrorResponseBody {
     }
 }
 
+#[derive(Debug)]
 pub struct ErrorFields<'a> {
     buf: &'a [u8],
 }
@@ -634,6 +651,7 @@ impl<'a> FallibleIterator for ErrorFields<'a> {
     }
 }
 
+#[derive(Debug)]
 pub struct ErrorField<'a> {
     type_: u8,
     value: &'a str,
@@ -651,6 +669,7 @@ impl<'a> ErrorField<'a> {
     }
 }
 
+#[derive(Debug)]
 pub struct NoticeResponseBody {
     storage: Bytes,
 }
@@ -662,6 +681,7 @@ impl NoticeResponseBody {
     }
 }
 
+#[derive(Debug)]
 pub struct NotificationResponseBody {
     process_id: i32,
     channel: Bytes,
@@ -685,6 +705,7 @@ impl NotificationResponseBody {
     }
 }
 
+#[derive(Debug)]
 pub struct ParameterDescriptionBody {
     storage: Bytes,
     len: u16,
@@ -700,6 +721,7 @@ impl ParameterDescriptionBody {
     }
 }
 
+#[derive(Debug)]
 pub struct Parameters<'a> {
     buf: &'a [u8],
     remaining: u16,
@@ -733,6 +755,7 @@ impl<'a> FallibleIterator for Parameters<'a> {
     }
 }
 
+#[derive(Debug)]
 pub struct ParameterStatusBody {
     name: Bytes,
     value: Bytes,
@@ -750,6 +773,7 @@ impl ParameterStatusBody {
     }
 }
 
+#[derive(Debug)]
 pub struct ReadyForQueryBody {
     status: u8,
 }
@@ -761,6 +785,7 @@ impl ReadyForQueryBody {
     }
 }
 
+#[derive(Debug)]
 pub struct RowDescriptionBody {
     storage: Bytes,
     len: u16,
@@ -776,6 +801,7 @@ impl RowDescriptionBody {
     }
 }
 
+#[derive(Debug)]
 pub struct Fields<'a> {
     buf: &'a [u8],
     remaining: u16,
@@ -821,6 +847,7 @@ impl<'a> FallibleIterator for Fields<'a> {
     }
 }
 
+#[derive(Debug)]
 pub struct Field<'a> {
     name: &'a str,
     table_oid: Oid,

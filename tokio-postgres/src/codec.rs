@@ -7,7 +7,14 @@ use std::io;
 
 pub enum FrontendMessage {
     Raw(Bytes),
+    RawQuery(Bytes),
     CopyData(CopyData<Box<dyn Buf>>),
+}
+
+impl FrontendMessage {
+    pub fn is_query(&self) -> bool {
+        matches!(self, FrontendMessage::RawQuery(_))
+    }
 }
 
 pub enum BackendMessage {
@@ -45,6 +52,7 @@ impl Encoder for PostgresCodec {
     fn encode(&self, item: FrontendMessage, dst: &mut BytesMut) -> io::Result<()> {
         match item {
             FrontendMessage::Raw(buf) => dst.extend_from_slice(&buf),
+            FrontendMessage::RawQuery(buf) => dst.extend_from_slice(&buf),
             FrontendMessage::CopyData(data) => data.write(dst),
         }
 

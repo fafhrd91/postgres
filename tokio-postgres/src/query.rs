@@ -16,13 +16,13 @@ pub fn query(
     statement: &Statement,
     params: &[&(dyn ToSql)],
 ) -> impl Future<Output = Result<Vec<Row>, Error>> {
-    let buf = match encode(client, statement, params) {
+    let buf = match encode(client, statement, params, false) {
         Ok(buf) => buf,
         Err(e) => return Either::Left(err(e)),
     };
 
     let statement = statement.clone();
-    let responses = match client.send(FrontendMessage::Raw(buf)) {
+    let responses = match client.send(FrontendMessage::RawQuery(buf)) {
         Ok(responses) => responses,
         Err(e) => return Either::Left(err(e)),
     };
@@ -83,7 +83,7 @@ pub async fn execute(
     statement: Statement,
     params: &[&(dyn ToSql)],
 ) -> Result<u64, Error> {
-    let buf = encode(client, &statement, params)?;
+    let buf = encode(client, &statement, params, true)?;
     let statement = statement.clone();
     let messages = start(client, buf).await?;
 
@@ -119,15 +119,18 @@ async fn start(client: &InnerClient, buf: Bytes) -> Result<VecDeque<Message>, Er
     }
 }
 
-pub fn encode(
+fn encode(
     client: &InnerClient,
     statement: &Statement,
     params: &[&(dyn ToSql)],
+    sync: bool,
 ) -> Result<Bytes, Error> {
     client.with_buf(|buf| {
         encode_bind(statement, params, "", buf)?;
         frontend::execute("", 0, buf).map_err(Error::encode)?;
-        frontend::sync(buf);
+        if sync {
+            frontend::sync(buf);
+        }
         Ok(buf.split().freeze())
     })
 }

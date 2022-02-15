@@ -125,53 +125,70 @@ impl Connection {
             let _ = self.io.poll_shutdown(cx);
             return Ok(());
         }
+        let mut idx = 0;
 
         loop {
-            let result = match self.receiver.poll_next_unpin(cx) {
+            match self.receiver.poll_recv(cx) {
                 Poll::Ready(Some(request)) => {
                     trace!("polled new request");
+
+                    if request.messages.is_query() {
+                        idx += 1;
+                    } else {
+                        idx = 0;
+                    }
                     self.responses.push_back(Response {
                         sender: request.sender,
                     });
-                    Poll::Ready(Some(request.messages))
-                }
-                Poll::Ready(None) => Poll::Ready(None),
-                Poll::Pending => Poll::Pending,
-            };
-
-            match result {
-                Poll::Ready(Some(request)) => {
-                    self.io.encode(request, &PostgresCodec).map_err(Error::io)?;
+                    self.io
+                        .encode(request.messages, &PostgresCodec)
+                        .map_err(Error::io)?;
                     if self.state == State::Terminating {
                         trace!("poll_write: sent eof, closing");
                         self.state = State::Closing;
                     } else {
+                        if idx > 50 {
+                            idx = 0;
+                            let mut request = BytesMut::new();
+                            frontend::sync(&mut request);
+                            self.io
+                                .encode(FrontendMessage::Raw(request.freeze()), &PostgresCodec)
+                                .map_err(Error::io)?;
+                        }
                         continue;
                     }
                 }
-                Poll::Ready(None) if self.responses.is_empty() && self.state == State::Active => {
-                    trace!("poll_write: at eof, terminating");
-                    self.state = State::Terminating;
-                    let mut request = BytesMut::new();
-                    frontend::terminate(&mut request);
-                    self.io
-                        .encode(FrontendMessage::Raw(request.freeze()), &PostgresCodec)
-                        .map_err(Error::io)?;
-                    self.state = State::Closing;
-                }
                 Poll::Ready(None) => {
-                    trace!(
-                        "poll_write: at eof, pending responses {}",
-                        self.responses.len()
-                    );
+                    if self.responses.is_empty() && self.state == State::Active {
+                        trace!("poll_write: at eof, terminating");
+                        self.state = State::Terminating;
+                        let mut request = BytesMut::new();
+                        frontend::terminate(&mut request);
+                        self.io
+                            .encode(FrontendMessage::Raw(request.freeze()), &PostgresCodec)
+                            .map_err(Error::io)?;
+                        self.state = State::Closing;
+                    } else {
+                        trace!(
+                            "poll_write: at eof, pending responses {}",
+                            self.responses.len()
+                        );
+                    }
                 }
-                Poll::Pending => {
-                    trace!("poll_write: waiting for request");
-                }
+                Poll::Pending => (),
             };
 
             break;
         }
+
+        if idx != 0 {
+            let mut request = BytesMut::new();
+            frontend::sync(&mut request);
+            self.io
+                .encode(FrontendMessage::Raw(request.freeze()), &PostgresCodec)
+                .map_err(Error::io)?;
+        }
+
         Ok(())
     }
 

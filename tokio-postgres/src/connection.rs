@@ -9,6 +9,7 @@ use log::trace;
 
 use ntex::channel::{mpsc, pool};
 use ntex::io::{Filter, Io, RecvError};
+use ntex::time::{Millis, Sleep};
 use ntex::util::Either;
 
 use postgres_protocol::message::backend::Message;
@@ -49,6 +50,9 @@ pub struct Connection {
     responses: VecDeque<Response>,
     state: State,
     messages: VecDeque<Message>,
+    idx: usize,
+    sleep: Sleep,
+    sleep_init: bool,
 }
 
 impl Connection {
@@ -61,6 +65,9 @@ impl Connection {
             io,
             parameters,
             receiver,
+            idx: 0,
+            sleep_init: false,
+            sleep: Sleep::new(Millis(1)),
             responses: VecDeque::new(),
             state: State::Active,
             messages: VecDeque::new(),
@@ -143,7 +150,12 @@ impl Connection {
             let _ = self.io.poll_shutdown(cx);
             return Ok(());
         }
-        let mut idx = 0;
+
+        let timeout = if self.sleep_init {
+            self.sleep.poll_elapsed(cx).is_ready()
+        } else {
+            false
+        };
 
         loop {
             match self.receiver.poll_recv(cx) {
@@ -151,9 +163,9 @@ impl Connection {
                     trace!("polled new request");
 
                     if request.messages.is_query() {
-                        idx += 1;
+                        self.idx += 1;
                     } else {
-                        idx = 0;
+                        self.idx = 0;
                     }
                     self.responses.push_back(Response {
                         sender: request.sender,
@@ -165,8 +177,8 @@ impl Connection {
                         trace!("poll_write: sent eof, closing");
                         self.state = State::Closing;
                     } else {
-                        if idx > 50 {
-                            idx = 0;
+                        if self.idx > 50 {
+                            self.idx = 0;
                             let mut request = BytesMut::new();
                             frontend::sync(&mut request);
                             self.io
@@ -199,12 +211,20 @@ impl Connection {
             break;
         }
 
-        if idx != 0 {
+        if self.idx > 0 && !self.sleep_init {
+            self.sleep_init = true;
+            self.sleep.reset(Millis(1));
+            let _ = self.sleep.poll_elapsed(cx);
+        }
+
+        if self.idx > 10 || timeout {
             let mut request = BytesMut::new();
             frontend::sync(&mut request);
             self.io
                 .encode(FrontendMessage::Raw(request.freeze()), &PostgresCodec)
                 .map_err(Error::io)?;
+            self.idx = 0;
+            self.sleep_init = false;
         }
 
         Ok(())

@@ -22,7 +22,7 @@ pub fn query(
     };
 
     let statement = statement.clone();
-    let responses = match client.send(FrontendMessage::RawQuery(buf)) {
+    let responses = match client.send(FrontendMessage::Raw(buf)) {
         Ok(responses) => responses,
         Err(e) => return Either::Left(err(e)),
     };

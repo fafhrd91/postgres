@@ -9,7 +9,6 @@ use log::trace;
 
 use ntex::channel::{mpsc, pool};
 use ntex::io::{Filter, Io, RecvError};
-use ntex::time::{Millis, Sleep};
 use ntex::util::Either;
 
 use postgres_protocol::message::backend::Message;
@@ -50,9 +49,6 @@ pub struct Connection {
     responses: VecDeque<Response>,
     state: State,
     messages: VecDeque<Message>,
-    idx: usize,
-    sleep: Sleep,
-    sleep_init: bool,
 }
 
 impl Connection {
@@ -65,9 +61,6 @@ impl Connection {
             io,
             parameters,
             receiver,
-            idx: 0,
-            sleep_init: false,
-            sleep: Sleep::new(Millis(1)),
             responses: VecDeque::new(),
             state: State::Active,
             messages: VecDeque::new(),
@@ -109,32 +102,14 @@ impl Connection {
                 }
             };
 
-            loop {
-                if let Some(item) = messages.next().map_err(Error::parse)? {
-                    if let Message::ErrorResponse(body) = item {
-                        return Err(Error::db(body));
-                    }
-                    if matches!(item, Message::ReadyForQuery(_)) {
-                        continue;
-                    }
-
-                    let complete = matches!(item, Message::CommandComplete(_));
-                    self.messages.push_back(item);
-
-                    if complete {
-                        let response = match self.responses.pop_front() {
-                            Some(response) => response,
-                            None => return Err(Error::unexpected_message()),
-                        };
-
-                        let _ = response.sender.send(mem::take(&mut self.messages));
-                    }
-                } else {
-                    break;
+            while let Some(item) = messages.next().map_err(Error::parse)? {
+                if let Message::ErrorResponse(body) = item {
+                    return Err(Error::db(body));
                 }
+                self.messages.push_back(item);
             }
 
-            if request_complete && !self.messages.is_empty() {
+            if request_complete {
                 let response = match self.responses.pop_front() {
                     Some(response) => response,
                     None => return Err(Error::unexpected_message()),
@@ -151,82 +126,52 @@ impl Connection {
             return Ok(());
         }
 
-        let timeout = if self.sleep_init {
-            self.sleep.poll_elapsed(cx).is_ready()
-        } else {
-            false
-        };
-
         loop {
-            match self.receiver.poll_recv(cx) {
+            let result = match self.receiver.poll_next_unpin(cx) {
                 Poll::Ready(Some(request)) => {
                     trace!("polled new request");
-
-                    if request.messages.is_query() {
-                        self.idx += 1;
-                    } else {
-                        self.idx = 0;
-                    }
                     self.responses.push_back(Response {
                         sender: request.sender,
                     });
-                    self.io
-                        .encode(request.messages, &PostgresCodec)
-                        .map_err(Error::io)?;
+                    Poll::Ready(Some(request.messages))
+                }
+                Poll::Ready(None) => Poll::Ready(None),
+                Poll::Pending => Poll::Pending,
+            };
+
+            match result {
+                Poll::Ready(Some(request)) => {
+                    self.io.encode(request, &PostgresCodec).map_err(Error::io)?;
                     if self.state == State::Terminating {
                         trace!("poll_write: sent eof, closing");
                         self.state = State::Closing;
                     } else {
-                        if self.idx > 50 {
-                            self.idx = 0;
-                            let mut request = BytesMut::new();
-                            frontend::sync(&mut request);
-                            self.io
-                                .encode(FrontendMessage::Raw(request.freeze()), &PostgresCodec)
-                                .map_err(Error::io)?;
-                        }
                         continue;
                     }
                 }
-                Poll::Ready(None) => {
-                    if self.responses.is_empty() && self.state == State::Active {
-                        trace!("poll_write: at eof, terminating");
-                        self.state = State::Terminating;
-                        let mut request = BytesMut::new();
-                        frontend::terminate(&mut request);
-                        self.io
-                            .encode(FrontendMessage::Raw(request.freeze()), &PostgresCodec)
-                            .map_err(Error::io)?;
-                        self.state = State::Closing;
-                    } else {
-                        trace!(
-                            "poll_write: at eof, pending responses {}",
-                            self.responses.len()
-                        );
-                    }
+                Poll::Ready(None) if self.responses.is_empty() && self.state == State::Active => {
+                    trace!("poll_write: at eof, terminating");
+                    self.state = State::Terminating;
+                    let mut request = BytesMut::new();
+                    frontend::terminate(&mut request);
+                    self.io
+                        .encode(FrontendMessage::Raw(request.freeze()), &PostgresCodec)
+                        .map_err(Error::io)?;
+                    self.state = State::Closing;
                 }
-                Poll::Pending => (),
+                Poll::Ready(None) => {
+                    trace!(
+                        "poll_write: at eof, pending responses {}",
+                        self.responses.len()
+                    );
+                }
+                Poll::Pending => {
+                    trace!("poll_write: waiting for request");
+                }
             };
 
             break;
         }
-
-        if self.idx > 0 && !self.sleep_init {
-            self.sleep_init = true;
-            self.sleep.reset(Millis(1));
-            let _ = self.sleep.poll_elapsed(cx);
-        }
-
-        if self.idx > 10 || timeout {
-            let mut request = BytesMut::new();
-            frontend::sync(&mut request);
-            self.io
-                .encode(FrontendMessage::Raw(request.freeze()), &PostgresCodec)
-                .map_err(Error::io)?;
-            self.idx = 0;
-            self.sleep_init = false;
-        }
-
         Ok(())
     }
 

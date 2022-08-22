@@ -130,7 +130,7 @@ mod connect;
 mod connect_raw;
 #[cfg(feature = "runtime")]
 mod connect_socket;
-mod connect_tls;
+// mod connect_tls;
 mod connection;
 pub mod error;
 mod maybe_tls_stream;

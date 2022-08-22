@@ -1,11 +1,11 @@
 use bytes::BytesMut;
 use ntex::io::Io;
 use postgres_protocol::message::frontend;
-use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt};
+use tokio::io::{AsyncRead, AsyncWrite};
 
 use crate::config::SslMode;
 use crate::tls::TlsConnect;
-use crate::{connect_tls, Error};
+use crate::Error;
 
 pub async fn cancel_query_raw(
     stream: Io,

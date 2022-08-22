@@ -1,6 +1,6 @@
 use std::{future::Future, io, time::Duration};
 
-use ntex::{rt, time, io::Io, util::PoolId, connect};
+use ntex::{connect, io::Io, rt, time, util::PoolId};
 
 use crate::config::Host;
 use crate::{Error, Socket};
@@ -18,12 +18,14 @@ pub(crate) async fn connect_socket(
     match host {
         Host::Tcp(host) => {
             let fut = connect::connect(connect::Connect::new(host.clone()).set_port(port));
-            let socket =
-                connect_with_timeout(
-                    async move {
-                        fut.await.map_err(|e| io::Error::new(io::ErrorKind::Other, "connect error"))
-                    },
-                    connect_timeout).await?;
+            let socket = connect_with_timeout(
+                async move {
+                    fut.await
+                        .map_err(|e| io::Error::new(io::ErrorKind::Other, "connect error"))
+                },
+                connect_timeout,
+            )
+            .await?;
             socket.set_memory_pool(PoolId::P10.pool_ref());
             Ok(socket)
         }

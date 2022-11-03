@@ -2,14 +2,13 @@ use std::collections::{HashMap, VecDeque};
 use std::task::{Context, Poll};
 use std::{cell::RefCell, future::Future, io, mem, pin::Pin, rc::Rc};
 
-use bytes::BytesMut;
 use fallible_iterator::FallibleIterator;
 use futures::{ready, Sink, Stream, StreamExt};
 use log::trace;
 
 use ntex::channel::{mpsc, pool};
 use ntex::io::{Filter, Io, RecvError};
-use ntex::util::Either;
+use ntex::util::{BytesMut, Either};
 
 use postgres_protocol::message::backend::Message;
 use postgres_protocol::message::frontend;
@@ -24,11 +23,11 @@ pub struct Request {
 }
 
 pub struct Response {
-    sender: pool::Sender<VecDeque<Message>>,
+    pub sender: pool::Sender<VecDeque<Message>>,
 }
 
 #[derive(PartialEq, Debug)]
-enum State {
+pub(crate) enum State {
     Active,
     Terminating,
     Closing,
@@ -43,12 +42,16 @@ enum State {
 /// occurred, or because its associated `Client` has dropped and all outstanding work has completed.
 #[must_use = "futures do nothing unless polled"]
 pub struct Connection {
-    io: Io,
     parameters: HashMap<String, String>,
     receiver: mpsc::Receiver<Request>,
-    responses: VecDeque<Response>,
-    state: State,
     messages: VecDeque<Message>,
+    inner: Rc<RefCell<ConnectionState>>,
+}
+
+pub(crate) struct ConnectionState {
+    pub io: Io,
+    pub responses: VecDeque<Response>,
+    state: State,
 }
 
 impl Connection {
@@ -56,31 +59,39 @@ impl Connection {
         io: Io,
         parameters: HashMap<String, String>,
         receiver: mpsc::Receiver<Request>,
-    ) -> Connection {
-        Connection {
+    ) -> (Connection, Rc<RefCell<ConnectionState>>) {
+        let inner = Rc::new(RefCell::new(ConnectionState {
             io,
-            parameters,
-            receiver,
             responses: VecDeque::new(),
             state: State::Active,
-            messages: VecDeque::new(),
-        }
+        }));
+        (
+            Connection {
+                parameters,
+                receiver,
+                inner: inner.clone(),
+                messages: VecDeque::new(),
+            },
+            inner,
+        )
     }
 
     fn poll_read(&mut self, cx: &mut Context<'_>) -> Result<bool, Error> {
-        if self.state != State::Active {
+        let mut inner = self.inner.borrow_mut();
+
+        if inner.state != State::Active {
             trace!("poll_read: done");
             return Ok(false);
         }
 
         loop {
-            let message = match self.io.poll_recv(&PostgresCodec, cx) {
+            let message = match inner.io.poll_recv(&PostgresCodec, cx) {
                 Poll::Ready(Ok(message)) => message,
                 Poll::Ready(Err(RecvError::Stop)) => return Ok(false),
                 Poll::Ready(Err(RecvError::PeerGone(None))) => return Ok(false),
                 Poll::Ready(Err(RecvError::PeerGone(Some(e)))) => return Err(e.into()),
                 Poll::Ready(Err(RecvError::WriteBackpressure)) => {
-                    if self.io.poll_flush(cx, false).is_pending() {
+                    if inner.io.poll_flush(cx, false).is_pending() {
                         return Ok(true);
                     }
                     continue;
@@ -110,7 +121,7 @@ impl Connection {
             }
 
             if request_complete {
-                let response = match self.responses.pop_front() {
+                let response = match inner.responses.pop_front() {
                     Some(response) => response,
                     None => return Err(Error::unexpected_message()),
                 };
@@ -121,8 +132,10 @@ impl Connection {
     }
 
     fn poll_write(&mut self, cx: &mut Context<'_>) -> Result<(), Error> {
-        if self.state == State::Closing {
-            let _ = self.io.poll_shutdown(cx);
+        let mut inner = self.inner.borrow_mut();
+
+        if inner.state == State::Closing {
+            let _ = inner.io.poll_shutdown(cx);
             return Ok(());
         }
 
@@ -130,7 +143,7 @@ impl Connection {
             let result = match self.receiver.poll_next_unpin(cx) {
                 Poll::Ready(Some(request)) => {
                     trace!("polled new request");
-                    self.responses.push_back(Response {
+                    inner.responses.push_back(Response {
                         sender: request.sender,
                     });
                     Poll::Ready(Some(request.messages))
@@ -141,28 +154,32 @@ impl Connection {
 
             match result {
                 Poll::Ready(Some(request)) => {
-                    self.io.encode(request, &PostgresCodec).map_err(Error::io)?;
-                    if self.state == State::Terminating {
+                    inner
+                        .io
+                        .encode(request, &PostgresCodec)
+                        .map_err(Error::io)?;
+                    if inner.state == State::Terminating {
                         trace!("poll_write: sent eof, closing");
-                        self.state = State::Closing;
+                        inner.state = State::Closing;
                     } else {
                         continue;
                     }
                 }
-                Poll::Ready(None) if self.responses.is_empty() && self.state == State::Active => {
+                Poll::Ready(None) if inner.responses.is_empty() && inner.state == State::Active => {
                     trace!("poll_write: at eof, terminating");
-                    self.state = State::Terminating;
+                    inner.state = State::Terminating;
                     let mut request = BytesMut::new();
                     frontend::terminate(&mut request);
-                    self.io
+                    inner
+                        .io
                         .encode(FrontendMessage::Raw(request.freeze()), &PostgresCodec)
                         .map_err(Error::io)?;
-                    self.state = State::Closing;
+                    inner.state = State::Closing;
                 }
                 Poll::Ready(None) => {
                     trace!(
                         "poll_write: at eof, pending responses {}",
-                        self.responses.len()
+                        inner.responses.len()
                     );
                 }
                 Poll::Pending => {
@@ -176,8 +193,9 @@ impl Connection {
     }
 
     fn poll_shutdown(&mut self, cx: &mut Context<'_>) -> Poll<Result<(), Error>> {
-        if !self.io.poll_shutdown(cx)?.is_ready() {
-            if self.state != State::Closing {
+        let inner = self.inner.borrow();
+        if !inner.io.poll_shutdown(cx)?.is_ready() {
+            if inner.state != State::Closing {
                 return Poll::Pending;
             }
         }

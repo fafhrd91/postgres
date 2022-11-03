@@ -1,18 +1,16 @@
-use bytes::{Buf, BytesMut};
+use std::collections::{HashMap, VecDeque};
+use std::task::{Context, Poll};
+use std::{cell::RefCell, cell::UnsafeCell, future::Future, rc::Rc, time::Duration};
+
 use fallible_iterator::FallibleIterator;
 use futures::{future, pin_mut, ready, StreamExt, TryStreamExt};
 use ntex::channel::{mpsc, pool};
+use ntex::util::{Buf, BytesMut};
 use postgres_protocol::message::backend::Message;
-use std::cell::UnsafeCell;
-use std::collections::{HashMap, VecDeque};
-use std::future::Future;
-use std::rc::Rc;
-use std::task::{Context, Poll};
-use std::time::Duration;
 
 use crate::codec::{BackendMessages, FrontendMessage};
 use crate::config::{Host, SslMode};
-use crate::connection::Request;
+use crate::connection::{ConnectionState, Request};
 use crate::tls::MakeTlsConnect;
 use crate::tls::TlsConnect;
 use crate::to_statement::ToStatement;
@@ -34,7 +32,8 @@ struct State {
 pub struct InnerClient {
     sender: mpsc::Sender<Request>,
     state: UnsafeCell<State>,
-    pool: pool::Pool<VecDeque<Message>>,
+    pub(crate) pool: pool::Pool<VecDeque<Message>>,
+    pub(crate) con: Rc<RefCell<ConnectionState>>,
 }
 
 impl InnerClient {
@@ -117,9 +116,11 @@ impl Client {
         ssl_mode: SslMode,
         process_id: i32,
         secret_key: i32,
+        con: Rc<RefCell<ConnectionState>>,
     ) -> Client {
         Client {
             inner: Rc::new(InnerClient {
+                con,
                 sender,
                 pool: pool::new(),
                 state: UnsafeCell::new(State {

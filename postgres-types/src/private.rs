@@ -1,5 +1,5 @@
 use crate::{FromSql, Type};
-pub use bytes::BytesMut;
+pub use bytes::{BytesMut, BytesVec};
 use std::error::Error;
 
 pub fn read_be_i32(buf: &mut &[u8]) -> Result<i32, Box<dyn Error + Sync + Send>> {

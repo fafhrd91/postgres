@@ -10,10 +10,10 @@
 //! This library assumes that the `client_encoding` backend parameter has been
 //! set to `UTF8`. It will most likely not behave properly if that is not the case.
 #![doc(html_root_url = "https://docs.rs/postgres-protocol/0.5")]
-#![warn(missing_docs, rust_2018_idioms, clippy::all)]
+// #![warn(missing_docs, rust_2018_idioms, clippy::all)]
 
 use byteorder::{BigEndian, ByteOrder};
-use bytes::{BufMut, BytesMut};
+use bytes::{BufMut, BytesMut, BytesVec};
 use std::io;
 
 pub mod authentication;
@@ -31,9 +31,25 @@ pub enum IsNull {
     No,
 }
 
-fn write_nullable<F, E>(serializer: F, buf: &mut BytesMut) -> Result<(), E>
+pub fn write_nullable<F, E>(serializer: F, buf: &mut BytesMut) -> Result<(), E>
 where
     F: FnOnce(&mut BytesMut) -> Result<IsNull, E>,
+    E: From<io::Error>,
+{
+    let base = buf.len();
+    buf.put_i32(0);
+    let size = match serializer(buf)? {
+        IsNull::No => i32::from_usize(buf.len() - base - 4)?,
+        IsNull::Yes => -1,
+    };
+    BigEndian::write_i32(&mut buf[base..], size);
+
+    Ok(())
+}
+
+pub fn write_nullable_vec<F, E>(serializer: F, buf: &mut BytesVec) -> Result<(), E>
+where
+    F: FnOnce(&mut BytesVec) -> Result<IsNull, E>,
     E: From<io::Error>,
 {
     let base = buf.len();

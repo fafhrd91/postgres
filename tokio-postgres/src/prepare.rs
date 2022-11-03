@@ -1,4 +1,3 @@
-use bytes::Bytes;
 use fallible_iterator::FallibleIterator;
 use futures::{pin_mut, TryStreamExt};
 use postgres_protocol::message::backend::Message;
@@ -7,6 +6,8 @@ use std::future::Future;
 use std::pin::Pin;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicUsize, Ordering};
+
+use ntex::util::Bytes;
 
 use crate::client::InnerClient;
 use crate::codec::FrontendMessage;

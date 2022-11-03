@@ -1,6 +1,6 @@
 //! Conversions to and from Postgres's binary format for various types.
 use byteorder::{BigEndian, ByteOrder, ReadBytesExt};
-use bytes::{BufMut, BytesMut};
+use bytes::{BufMut, BytesMut, BytesVec};
 use fallible_iterator::FallibleIterator;
 use std::boxed::Box as StdBox;
 use std::error::Error;
@@ -8,7 +8,7 @@ use std::io::Read;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::str;
 
-use crate::{write_nullable, FromUsize, IsNull, Oid};
+use crate::{write_nullable, write_nullable_vec, FromUsize, IsNull, Oid};
 
 #[cfg(test)]
 mod test;
@@ -28,6 +28,12 @@ pub fn bool_to_sql(v: bool, buf: &mut BytesMut) {
     buf.put_u8(v as u8);
 }
 
+/// Serializes a `BOOL` value.
+#[inline]
+pub fn bool_to_sql_vec(v: bool, buf: &mut BytesVec) {
+    buf.put_u8(v as u8);
+}
+
 /// Deserializes a `BOOL` value.
 #[inline]
 pub fn bool_from_sql(buf: &[u8]) -> Result<bool, StdBox<dyn Error + Sync + Send>> {
@@ -44,6 +50,11 @@ pub fn bytea_to_sql(v: &[u8], buf: &mut BytesMut) {
     buf.put_slice(v);
 }
 
+#[inline]
+pub fn bytea_to_sql_vec(v: &[u8], buf: &mut BytesVec) {
+    buf.put_slice(v);
+}
+
 /// Deserializes a `BYTEA value.
 #[inline]
 pub fn bytea_from_sql(buf: &[u8]) -> &[u8] {
@@ -56,6 +67,11 @@ pub fn text_to_sql(v: &str, buf: &mut BytesMut) {
     buf.put_slice(v.as_bytes());
 }
 
+#[inline]
+pub fn text_to_sql_vec(v: &str, buf: &mut BytesVec) {
+    buf.put_slice(v.as_bytes());
+}
+
 /// Deserializes a `TEXT`, `VARCHAR`, `CHAR(n)`, `NAME`, or `CITEXT` value.
 #[inline]
 pub fn text_from_sql(buf: &[u8]) -> Result<&str, StdBox<dyn Error + Sync + Send>> {
@@ -65,6 +81,11 @@ pub fn text_from_sql(buf: &[u8]) -> Result<&str, StdBox<dyn Error + Sync + Send>
 /// Serializes a `"char"` value.
 #[inline]
 pub fn char_to_sql(v: i8, buf: &mut BytesMut) {
+    buf.put_i8(v);
+}
+
+#[inline]
+pub fn char_to_sql_vec(v: i8, buf: &mut BytesVec) {
     buf.put_i8(v);
 }
 
@@ -84,6 +105,11 @@ pub fn int2_to_sql(v: i16, buf: &mut BytesMut) {
     buf.put_i16(v);
 }
 
+#[inline]
+pub fn int2_to_sql_vec(v: i16, buf: &mut BytesVec) {
+    buf.put_i16(v);
+}
+
 /// Deserializes an `INT2` value.
 #[inline]
 pub fn int2_from_sql(mut buf: &[u8]) -> Result<i16, StdBox<dyn Error + Sync + Send>> {
@@ -97,6 +123,11 @@ pub fn int2_from_sql(mut buf: &[u8]) -> Result<i16, StdBox<dyn Error + Sync + Se
 /// Serializes an `INT4` value.
 #[inline]
 pub fn int4_to_sql(v: i32, buf: &mut BytesMut) {
+    buf.put_i32(v);
+}
+
+#[inline]
+pub fn int4_to_sql_vec(v: i32, buf: &mut BytesVec) {
     buf.put_i32(v);
 }
 
@@ -116,6 +147,11 @@ pub fn oid_to_sql(v: Oid, buf: &mut BytesMut) {
     buf.put_u32(v);
 }
 
+#[inline]
+pub fn oid_to_sql_vec(v: Oid, buf: &mut BytesVec) {
+    buf.put_u32(v);
+}
+
 /// Deserializes an `OID` value.
 #[inline]
 pub fn oid_from_sql(mut buf: &[u8]) -> Result<Oid, StdBox<dyn Error + Sync + Send>> {
@@ -129,6 +165,11 @@ pub fn oid_from_sql(mut buf: &[u8]) -> Result<Oid, StdBox<dyn Error + Sync + Sen
 /// Serializes an `INT8` value.
 #[inline]
 pub fn int8_to_sql(v: i64, buf: &mut BytesMut) {
+    buf.put_i64(v);
+}
+
+#[inline]
+pub fn int8_to_sql_vec(v: i64, buf: &mut BytesVec) {
     buf.put_i64(v);
 }
 
@@ -148,6 +189,11 @@ pub fn float4_to_sql(v: f32, buf: &mut BytesMut) {
     buf.put_f32(v);
 }
 
+#[inline]
+pub fn float4_to_sql_vec(v: f32, buf: &mut BytesVec) {
+    buf.put_f32(v);
+}
+
 /// Deserializes a `FLOAT4` value.
 #[inline]
 pub fn float4_from_sql(mut buf: &[u8]) -> Result<f32, StdBox<dyn Error + Sync + Send>> {
@@ -164,6 +210,11 @@ pub fn float8_to_sql(v: f64, buf: &mut BytesMut) {
     buf.put_f64(v);
 }
 
+#[inline]
+pub fn float8_to_sql_vec(v: f64, buf: &mut BytesVec) {
+    buf.put_f64(v);
+}
+
 /// Deserializes a `FLOAT8` value.
 #[inline]
 pub fn float8_from_sql(mut buf: &[u8]) -> Result<f64, StdBox<dyn Error + Sync + Send>> {
@@ -176,10 +227,7 @@ pub fn float8_from_sql(mut buf: &[u8]) -> Result<f64, StdBox<dyn Error + Sync + 
 
 /// Serializes an `HSTORE` value.
 #[inline]
-pub fn hstore_to_sql<'a, I>(
-    values: I,
-    buf: &mut BytesMut,
-) -> Result<(), StdBox<dyn Error + Sync + Send>>
+pub fn hstore_to_sql<'a, I>(values: I, buf: &mut BytesMut) -> Result<(), StdBox<dyn Error>>
 where
     I: IntoIterator<Item = (&'a str, Option<&'a str>)>,
 {
@@ -206,7 +254,42 @@ where
     Ok(())
 }
 
-fn write_pascal_string(s: &str, buf: &mut BytesMut) -> Result<(), StdBox<dyn Error + Sync + Send>> {
+#[inline]
+pub fn hstore_to_sql_vec<'a, I>(values: I, buf: &mut BytesVec) -> Result<(), StdBox<dyn Error>>
+where
+    I: IntoIterator<Item = (&'a str, Option<&'a str>)>,
+{
+    let base = buf.len();
+    buf.put_i32(0);
+
+    let mut count = 0;
+    for (key, value) in values {
+        count += 1;
+
+        write_pascal_string_vec(key, buf)?;
+
+        match value {
+            Some(value) => {
+                write_pascal_string_vec(value, buf)?;
+            }
+            None => buf.put_i32(-1),
+        }
+    }
+
+    let count = i32::from_usize(count)?;
+    BigEndian::write_i32(&mut buf[base..], count);
+
+    Ok(())
+}
+
+fn write_pascal_string(s: &str, buf: &mut BytesMut) -> Result<(), StdBox<dyn Error>> {
+    let size = i32::from_usize(s.len())?;
+    buf.put_i32(size);
+    buf.put_slice(s.as_bytes());
+    Ok(())
+}
+
+fn write_pascal_string_vec(s: &str, buf: &mut BytesVec) -> Result<(), StdBox<dyn Error>> {
     let size = i32::from_usize(s.len())?;
     buf.put_i32(size);
     buf.put_slice(s.as_bytes());
@@ -355,6 +438,11 @@ pub fn timestamp_to_sql(v: i64, buf: &mut BytesMut) {
     buf.put_i64(v);
 }
 
+#[inline]
+pub fn timestamp_to_sql_vec(v: i64, buf: &mut BytesVec) {
+    buf.put_i64(v);
+}
+
 /// Deserializes a `TIMESTAMP` or `TIMESTAMPTZ` value.
 ///
 /// The value represents the number of microseconds since midnight, January 1st, 2000.
@@ -449,11 +537,11 @@ pub fn array_to_sql<T, I, J, F>(
     elements: J,
     mut serializer: F,
     buf: &mut BytesMut,
-) -> Result<(), StdBox<dyn Error + Sync + Send>>
+) -> Result<(), StdBox<dyn Error>>
 where
     I: IntoIterator<Item = ArrayDimension>,
     J: IntoIterator<Item = T>,
-    F: FnMut(T, &mut BytesMut) -> Result<IsNull, StdBox<dyn Error + Sync + Send>>,
+    F: FnMut(T, &mut BytesMut) -> Result<IsNull, StdBox<dyn Error>>,
 {
     let dimensions_idx = buf.len();
     buf.put_i32(0);
@@ -474,6 +562,54 @@ where
     let mut has_nulls = false;
     for element in elements {
         write_nullable(
+            |buf| {
+                let r = serializer(element, buf);
+                if let Ok(IsNull::Yes) = r {
+                    has_nulls = true;
+                }
+                r
+            },
+            buf,
+        )?;
+    }
+
+    BigEndian::write_i32(&mut buf[flags_idx..], has_nulls as i32);
+
+    Ok(())
+}
+
+#[inline]
+pub fn array_to_sql_vec<T, I, J, F>(
+    dimensions: I,
+    element_type: Oid,
+    elements: J,
+    mut serializer: F,
+    buf: &mut BytesVec,
+) -> Result<(), StdBox<dyn Error>>
+where
+    I: IntoIterator<Item = ArrayDimension>,
+    J: IntoIterator<Item = T>,
+    F: FnMut(T, &mut BytesVec) -> Result<IsNull, StdBox<dyn Error>>,
+{
+    let dimensions_idx = buf.len();
+    buf.put_i32(0);
+    let flags_idx = buf.len();
+    buf.put_i32(0);
+    buf.put_u32(element_type);
+
+    let mut num_dimensions = 0;
+    for dimension in dimensions {
+        num_dimensions += 1;
+        buf.put_i32(dimension.len);
+        buf.put_i32(dimension.lower_bound);
+    }
+
+    let num_dimensions = i32::from_usize(num_dimensions)?;
+    BigEndian::write_i32(&mut buf[dimensions_idx..], num_dimensions);
+
+    let mut has_nulls = false;
+    for element in elements {
+        write_nullable_vec(
             |buf| {
                 let r = serializer(element, buf);
                 if let Ok(IsNull::Yes) = r {

@@ -145,6 +145,7 @@ mod statement;
 pub mod tls;
 mod to_statement;
 //mod transaction;
+mod frontend;
 pub mod types;
 
 /// A convenience function which parses a connection string and connects to the database.

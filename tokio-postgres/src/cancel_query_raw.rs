@@ -1,4 +1,3 @@
-use bytes::BytesMut;
 use ntex::io::Io;
 use postgres_protocol::message::frontend;
 use tokio::io::{AsyncRead, AsyncWrite};

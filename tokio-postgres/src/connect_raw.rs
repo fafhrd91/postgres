@@ -13,7 +13,7 @@ use crate::codec::{BackendMessage, BackendMessages, FrontendMessage, PostgresCod
 use crate::config::{self, Config};
 use crate::maybe_tls_stream::MaybeTlsStream;
 use crate::tls::{TlsConnect, TlsStream};
-use crate::{Client, Connection, Error};
+use crate::{connection::ConnectionState, Client, Connection, Error};
 
 pub struct StartupStream {
     io: Io,
@@ -57,8 +57,8 @@ pub async fn connect_raw(io: Io, config: &Config) -> Result<(Client, Connection)
     let (process_id, secret_key, parameters) = read_info(&mut stream).await?;
 
     let (sender, receiver) = mpsc::channel();
-    let client = Client::new(sender, config.ssl_mode, process_id, secret_key);
-    let connection = Connection::new(stream.io, parameters, receiver);
+    let (connection, state) = Connection::new(stream.io, parameters, receiver);
+    let client = Client::new(sender, config.ssl_mode, process_id, secret_key, state);
 
     Ok((client, connection))
 }

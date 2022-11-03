@@ -1,10 +1,12 @@
-use crate::tls::{ChannelBinding, TlsStream};
-use bytes::{Buf, BufMut};
 use std::io;
 use std::mem::MaybeUninit;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
+
+use ntex::util::{Buf, BufMut};
+
+use crate::tls::{ChannelBinding, TlsStream};
 
 pub enum MaybeTlsStream<S, T> {
     Raw(S),

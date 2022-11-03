@@ -1,6 +1,6 @@
-use bytes::{Buf, Bytes, BytesMut};
 use fallible_iterator::FallibleIterator;
 use ntex::codec::{Decoder, Encoder};
+use ntex::util::{Buf, Bytes, BytesMut};
 use postgres_protocol::message::backend;
 use postgres_protocol::message::frontend::CopyData;
 use std::io;

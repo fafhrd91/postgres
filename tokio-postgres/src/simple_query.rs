@@ -1,4 +1,3 @@
-use bytes::Bytes;
 use fallible_iterator::FallibleIterator;
 use futures::{ready, Stream};
 use log::debug;
@@ -10,6 +9,8 @@ use std::marker::PhantomPinned;
 use std::pin::Pin;
 use std::rc::Rc;
 use std::task::{Context, Poll};
+
+use ntex::util::Bytes;
 
 use crate::client::{InnerClient, Responses};
 use crate::codec::FrontendMessage;

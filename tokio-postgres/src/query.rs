@@ -1,34 +1,40 @@
-use bytes::{Bytes, BytesMut};
 use futures::future::{err, Either};
 use futures::{ready, Future, Stream};
-use postgres_protocol::message::backend::Message;
-use postgres_protocol::message::frontend;
 use std::task::{Context, Poll};
 use std::{collections::VecDeque, pin::Pin};
 
+use ntex::util::{Bytes, BytesMut, BytesVec};
+use postgres_protocol::message::backend::Message;
+
 use crate::client::{InnerClient, Responses};
-use crate::codec::FrontendMessage;
+use crate::connection::{ConnectionState, Response};
 use crate::types::{IsNull, ToSql};
-use crate::{Error, Portal, Row, Statement};
+use crate::{codec::FrontendMessage, frontend, Error, Portal, Row, Statement};
 
 pub fn query(
     client: &InnerClient,
     statement: &Statement,
     params: &[&(dyn ToSql)],
 ) -> impl Future<Output = Result<Vec<Row>, Error>> {
-    let buf = match encode(client, statement, params) {
-        Ok(buf) => buf,
-        Err(e) => return Either::Left(err(e)),
-    };
+    let mut st = client.con.borrow_mut();
+
+    let result = st.io.with_write_buf(|buf| {
+        encode_bind_vec(statement, params, "", buf)?;
+        frontend::execute_vec("", 0, buf).map_err(Error::encode)?;
+        frontend::sync_vec(buf);
+        Ok::<_, Error>(())
+    });
+
+    if let Err(e) = result {
+        return Either::Left(err(Error::from(e)));
+    }
+
+    let (sender, receiver) = client.pool.channel();
+    st.responses.push_back(Response { sender });
 
     let statement = statement.clone();
-    let responses = match client.send(FrontendMessage::Raw(buf)) {
-        Ok(responses) => responses,
-        Err(e) => return Either::Left(err(e)),
-    };
-
     Either::Right(async move {
-        let mut messages = responses.receiver.await?;
+        let mut messages = receiver.await?;
         if let Message::BindComplete = messages[0] {
             let mut rows = Vec::with_capacity(messages.len() - 1);
             messages.pop_front();
@@ -147,6 +153,38 @@ pub fn encode_bind(
         Some(1),
         params.zip(statement.params()).enumerate(),
         |(idx, (param, ty)), buf| match param.to_sql_checked(ty, buf) {
+            Ok(IsNull::No) => Ok(postgres_protocol::IsNull::No),
+            Ok(IsNull::Yes) => Ok(postgres_protocol::IsNull::Yes),
+            Err(e) => {
+                error_idx = idx;
+                Err(e)
+            }
+        },
+        Some(1),
+        buf,
+    );
+    match r {
+        Ok(()) => Ok(()),
+        Err(frontend::BindError::Conversion(e)) => Err(Error::to_sql(e, error_idx)),
+        Err(frontend::BindError::Serialization(e)) => Err(Error::encode(e)),
+    }
+}
+
+pub fn encode_bind_vec(
+    statement: &Statement,
+    params: &[&(dyn ToSql)],
+    portal: &str,
+    buf: &mut BytesVec,
+) -> Result<(), Error> {
+    let params = params.into_iter();
+
+    let mut error_idx = 0;
+    let r = frontend::bind_vec(
+        portal,
+        statement.name(),
+        Some(1),
+        params.zip(statement.params()).enumerate(),
+        |(idx, (param, ty)), buf| match param.to_sql_checked_vec(ty, buf) {
             Ok(IsNull::No) => Ok(postgres_protocol::IsNull::No),
             Ok(IsNull::Yes) => Ok(postgres_protocol::IsNull::Yes),
             Err(e) => {

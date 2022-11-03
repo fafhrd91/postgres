@@ -1,4 +1,3 @@
-use bytes::{Buf, BufMut};
 use std::io;
 use std::mem::MaybeUninit;
 use std::pin::Pin;
@@ -7,6 +6,8 @@ use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 use tokio::net::TcpStream;
 #[cfg(unix)]
 use tokio::net::UnixStream;
+
+use ntex::util::{Buf, BufMut};
 
 #[derive(Debug)]
 enum Inner {

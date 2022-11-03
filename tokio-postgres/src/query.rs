@@ -3,7 +3,7 @@ use futures::{ready, Future, Stream};
 use std::task::{Context, Poll};
 use std::{collections::VecDeque, pin::Pin};
 
-use ntex::util::{Bytes, BytesMut, BytesVec};
+use ntex::util::{BufMut, Bytes, BytesMut, BytesVec};
 use postgres_protocol::message::backend::Message;
 
 use crate::client::{InnerClient, Responses};
@@ -19,6 +19,12 @@ pub fn query(
     let mut st = client.con.borrow_mut();
 
     let result = st.io.with_write_buf(|buf| {
+        // make sure we've got room
+        let remaining = buf.remaining_mut();
+        if remaining < 1024 {
+            buf.reserve(64 * 1024 - remaining);
+        }
+
         encode_bind_vec(statement, params, "", buf)?;
         frontend::execute_vec("", 0, buf).map_err(Error::encode)?;
         frontend::sync_vec(buf);

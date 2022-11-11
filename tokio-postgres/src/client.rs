@@ -197,22 +197,7 @@ impl Client {
         statement: &Statement,
         params: &[&(dyn ToSql)],
     ) -> impl Future<Output = Result<Row, Error>> {
-        let fut = self.query_raw(statement, params);
-
-        async move {
-            let mut iter = fut.await?.into_iter();
-            let row = if let Some(row) = iter.next() {
-                row
-            } else {
-                return Err(Error::row_count());
-            };
-
-            if iter.next().is_some() {
-                return Err(Error::row_count());
-            }
-
-            Ok(row)
-        }
+        query::query_one(&self.inner, statement, params)
     }
 
     /// Executes a statements which returns zero or one rows, returning it.

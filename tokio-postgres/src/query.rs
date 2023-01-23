@@ -22,7 +22,7 @@ pub fn query(
         // make sure we've got room
         let remaining = buf.remaining_mut();
         if remaining < 1024 {
-            buf.reserve(64 * 1024 - remaining);
+            buf.reserve(256 * 1024 - remaining);
         }
 
         encode_bind_vec(statement, params, "", buf)?;
@@ -72,7 +72,7 @@ pub fn query_one(
         // make sure we've got room
         let remaining = buf.remaining_mut();
         if remaining < 1024 {
-            buf.reserve(64 * 1024 - remaining);
+            buf.reserve(256 * 1024 - remaining);
         }
 
         encode_bind_vec(statement, params, "", buf)?;

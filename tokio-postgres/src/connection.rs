@@ -85,19 +85,16 @@ impl Connection {
         }
 
         loop {
-            let message = match inner.io.poll_recv(&PostgresCodec, cx) {
-                Poll::Ready(Ok(message)) => message,
-                Poll::Ready(Err(RecvError::Stop)) => return Ok(false),
-                Poll::Ready(Err(RecvError::PeerGone(None))) => return Ok(false),
-                Poll::Ready(Err(RecvError::PeerGone(Some(e)))) => return Err(e.into()),
-                Poll::Ready(Err(RecvError::WriteBackpressure)) => {
-                    if inner.io.poll_flush(cx, false).is_pending() {
-                        return Ok(true);
+            let message = match inner.io.decode(&PostgresCodec) {
+                Ok(Some(message)) => message,
+                Ok(None) => {
+                    return match inner.io.poll_read_ready(cx) {
+                        Poll::Ready(Ok(Some(()))) | Poll::Pending => Ok(true),
+                        Poll::Ready(Ok(None)) => Ok(false),
+                        Poll::Ready(Err(e)) => Err(e.into()),
                     }
-                    continue;
                 }
-                Poll::Ready(Err(_)) => return Ok(false),
-                Poll::Pending => return Ok(true),
+                Err(e) => return Ok(false),
             };
 
             let (mut messages, request_complete) = match message {

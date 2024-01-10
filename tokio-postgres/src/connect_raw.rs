@@ -1,8 +1,8 @@
-use std::{collections::HashMap, io, pin::Pin, task::Context, task::Poll};
+use std::{collections::HashMap, io, pin::Pin, future::poll_fn, task::Context, task::Poll};
 
 use fallible_iterator::FallibleIterator;
 use futures::{ready, Sink, SinkExt, Stream, StreamExt, TryStreamExt};
-use ntex::{channel::mpsc, io::Io, io::RecvError, util::poll_fn, util::BytesMut};
+use ntex::{channel::mpsc, io::Io, io::RecvError, util::BytesMut};
 use postgres_protocol::authentication;
 use postgres_protocol::authentication::sasl;
 use postgres_protocol::authentication::sasl::ScramSha256;

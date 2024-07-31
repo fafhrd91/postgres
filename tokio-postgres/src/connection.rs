@@ -162,7 +162,9 @@ impl Connection {
                         continue;
                     }
                 }
-                Poll::Ready(None) if inner.responses.is_empty() && inner.state == State::Active => {
+                Poll::Ready(None)
+                    if inner.responses.is_empty() && inner.state == State::Active =>
+                {
                     trace!("poll_write: at eof, terminating");
                     inner.state = State::Terminating;
                     let mut request = BytesMut::new();
@@ -209,7 +211,7 @@ impl Future for Connection {
     type Output = Result<(), Error>;
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Error>> {
-        let _ = self.poll_write(cx)?;
+        self.poll_write(cx)?;
         let active = self.poll_read(cx)?;
 
         if active {

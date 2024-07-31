@@ -170,12 +170,12 @@ impl Client {
     /// # Panics
     ///
     /// Panics if the number of parameters provided does not match the number expected.
-    pub fn query(
+    pub async fn query(
         &self,
         statement: &Statement,
         params: &[&(dyn ToSql)],
-    ) -> impl Future<Output = Result<Vec<Row>, Error>> {
-        self.query_raw(statement, params)
+    ) -> Result<Vec<Row>, Error> {
+        self.query_raw(statement, params).await
     }
 
     /// Executes a statement which returns a single row, returning it.
@@ -192,12 +192,12 @@ impl Client {
     /// # Panics
     ///
     /// Panics if the number of parameters provided does not match the number expected.
-    pub fn query_one(
+    pub async fn query_one(
         &self,
         statement: &Statement,
         params: &[&(dyn ToSql)],
-    ) -> impl Future<Output = Result<Row, Error>> {
-        query::query_one(&self.inner, statement, params)
+    ) -> Result<Row, Error> {
+        query::query_one(&self.inner, statement, params).await
     }
 
     /// Executes a statements which returns zero or one rows, returning it.
@@ -248,12 +248,12 @@ impl Client {
     /// Panics if the number of parameters provided does not match the number expected.
     ///
     /// [`query`]: #method.query
-    pub fn query_raw(
+    pub async fn query_raw(
         &self,
         statement: &Statement,
         params: &[&(dyn ToSql)],
-    ) -> impl Future<Output = Result<Vec<Row>, Error>> {
-        query::query(&self.inner, statement, params)
+    ) -> Result<Vec<Row>, Error> {
+        query::query(&self.inner, statement, params).await
     }
 
     /// Executes a statement, returning the number of rows modified.

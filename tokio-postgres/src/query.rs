@@ -11,103 +11,95 @@ use crate::connection::{ConnectionState, Response};
 use crate::types::{IsNull, ToSql};
 use crate::{codec::FrontendMessage, frontend, Error, Portal, Row, Statement};
 
-pub fn query(
+pub async fn query(
     client: &InnerClient,
     statement: &Statement,
     params: &[&(dyn ToSql)],
-) -> impl Future<Output = Result<Vec<Row>, Error>> {
-    let mut st = client.con.borrow_mut();
+) -> Result<Vec<Row>, Error> {
+    let receiver = {
+        let mut st = client.con.borrow_mut();
 
-    let result = st.io.with_write_buf(|buf| {
-        // make sure we've got room
-        let remaining = buf.remaining_mut();
-        if remaining < 1024 {
-            buf.reserve(256 * 1024 - remaining);
-        }
+        st.io.with_write_buf(|buf| {
+            // make sure we've got room
+            let remaining = buf.remaining_mut();
+            if remaining < 1024 {
+                buf.reserve(256 * 1024 - remaining);
+            }
 
-        encode_bind_vec(statement, params, "", buf)?;
-        frontend::execute_vec("", 0, buf).map_err(Error::encode)?;
-        frontend::sync_vec(buf);
-        Ok::<_, Error>(())
-    });
+            encode_bind_vec(statement, params, "", buf)?;
+            frontend::execute_vec("", 0, buf).map_err(Error::encode)?;
+            frontend::sync_vec(buf);
+            Ok::<_, Error>(())
+        })??;
 
-    if let Err(e) = result {
-        return Either::Left(err(Error::from(e)));
-    }
+        let (sender, receiver) = client.pool.channel();
+        st.responses.push_back(Response { sender });
+        receiver
+    };
 
-    let (sender, receiver) = client.pool.channel();
-    st.responses.push_back(Response { sender });
-
-    let statement = statement.clone();
-    Either::Right(async move {
-        let mut messages = receiver.await?;
-        if let Message::BindComplete = messages[0] {
-            let mut rows = Vec::with_capacity(messages.len() - 1);
-            messages.pop_front();
-            for msg in messages {
-                match msg {
-                    Message::DataRow(body) => rows.push(Row::new(statement.clone(), body)?),
-                    Message::EmptyQueryResponse
+    let mut messages = receiver.await?;
+    if let Message::BindComplete = messages[0] {
+        let mut rows = Vec::with_capacity(messages.len() - 1);
+        messages.pop_front();
+        for msg in messages {
+            match msg {
+                Message::DataRow(body) => rows.push(Row::new(statement.clone(), body)?),
+                Message::EmptyQueryResponse
                     | Message::CommandComplete(_)
                     | Message::PortalSuspended => break,
-                    Message::ErrorResponse(body) => return Err(Error::db(body)),
-                    _ => return Err(Error::unexpected_message()),
-                }
+                Message::ErrorResponse(body) => return Err(Error::db(body)),
+                _ => return Err(Error::unexpected_message()),
             }
-            Ok(rows)
-        } else {
-            Err(Error::unexpected_message())
         }
-    })
+        Ok(rows)
+    } else {
+        Err(Error::unexpected_message())
+    }
 }
 
-pub fn query_one(
+pub async fn query_one(
     client: &InnerClient,
     statement: &Statement,
     params: &[&(dyn ToSql)],
-) -> impl Future<Output = Result<Row, Error>> {
-    let mut st = client.con.borrow_mut();
+) -> Result<Row, Error> {
+    let receiver = {
+        let mut st = client.con.borrow_mut();
 
-    let result = st.io.with_write_buf(|buf| {
-        // make sure we've got room
-        let remaining = buf.remaining_mut();
-        if remaining < 1024 {
-            buf.reserve(256 * 1024 - remaining);
-        }
-
-        encode_bind_vec(statement, params, "", buf)?;
-        frontend::execute_vec("", 0, buf).map_err(Error::encode)?;
-        frontend::sync_vec(buf);
-        Ok::<_, Error>(())
-    });
-
-    if let Err(e) = result {
-        return Either::Left(err(Error::from(e)));
-    }
-
-    let (sender, receiver) = client.pool.channel();
-    st.responses.push_back(Response { sender });
-
-    let statement = statement.clone();
-    Either::Right(async move {
-        let mut messages = receiver.await?;
-        if let Message::BindComplete = messages[0] {
-            messages.pop_front();
-            for msg in messages {
-                match msg {
-                    Message::DataRow(body) => return Ok(Row::new(statement.clone(), body)?),
-                    Message::EmptyQueryResponse
-                    | Message::CommandComplete(_)
-                    | Message::PortalSuspended => break,
-                    Message::ErrorResponse(body) => return Err(Error::db(body)),
-                    _ => return Err(Error::unexpected_message()),
-                }
+        st.io.with_write_buf(|buf| {
+            // make sure we've got room
+            let remaining = buf.remaining_mut();
+            if remaining < 1024 {
+                buf.reserve(256 * 1024 - remaining);
             }
-            Err(Error::unexpected_message())
-        } else {
-            Err(Error::unexpected_message())
+
+            encode_bind_vec(statement, params, "", buf)?;
+            frontend::execute_vec("", 0, buf).map_err(Error::encode)?;
+            frontend::sync_vec(buf);
+            Ok::<_, Error>(())
+        })??;
+
+        let (sender, receiver) = client.pool.channel();
+        st.responses.push_back(Response { sender });
+        receiver
+    };
+
+    let mut messages = receiver.await?;
+    if let Message::BindComplete = messages[0] {
+        messages.pop_front();
+        if let Some(msg) = messages.pop_front() {
+            match msg {
+                Message::DataRow(body) => return Row::new(statement.clone(), body),
+                Message::EmptyQueryResponse
+                    | Message::CommandComplete(_)
+                    | Message::PortalSuspended => (),
+                Message::ErrorResponse(body) => return Err(Error::db(body)),
+                _ => (),
+            }
         }
-    })
+        Err(Error::unexpected_message())
+    } else {
+        Err(Error::unexpected_message())
+    }
 }
 
 pub async fn query_portal(
@@ -116,7 +108,7 @@ pub async fn query_portal(
     max_rows: i32,
 ) -> Result<Vec<Row>, Error> {
     let buf = client.with_buf(|buf| {
-        frontend::execute(portal.name(), max_rows, buf).map_err(|e| Error::encode(e))?;
+        frontend::execute(portal.name(), max_rows, buf).map_err(Error::encode)?;
         frontend::sync(buf);
         Ok::<_, Error>(buf.split().freeze())
     })?;
@@ -199,7 +191,7 @@ pub fn encode_bind(
     portal: &str,
     buf: &mut BytesMut,
 ) -> Result<(), Error> {
-    let params = params.into_iter();
+    let params = params.iter();
 
     let mut error_idx = 0;
     let r = frontend::bind(
@@ -231,7 +223,7 @@ pub fn encode_bind_vec(
     portal: &str,
     buf: &mut BytesVec,
 ) -> Result<(), Error> {
-    let params = params.into_iter();
+    let params = params.iter();
 
     let mut error_idx = 0;
     let r = frontend::bind_vec(

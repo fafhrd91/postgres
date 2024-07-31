@@ -35,11 +35,10 @@ with-serde_json-1 = ["postgres-types/with-serde_json-1"]
 with-uuid-0_8 = ["postgres-types/with-uuid-0_8"]
 
 [dependencies]
-ntex = "1.0.0"
-# bytes = { version = "0.1.8", package = "ntex-bytes" }
+ntex = "2"
 byteorder = "1.4"
 fallible-iterator = "0.2"
-futures = "0.3.13"
+futures = "0.3"
 log = "0.4"
 percent-encoding = "2.0"
 pin-project-lite = "0.2"
@@ -50,8 +49,8 @@ tokio = { version = "1", default-features = false }
 
 [dev-dependencies]
 tokio = { version = "1" }
-ntex = { version = "1.0.0", features = ["tokio"] }
-env_logger = "0.10"
+ntex = { version = "2", features = ["tokio"] }
+env_logger = "0.11"
 criterion = "0.3"
 
 bit-vec-06 = { version = "0.6", package = "bit-vec" }

@@ -162,9 +162,7 @@ impl Connection {
                         continue;
                     }
                 }
-                Poll::Ready(None)
-                    if inner.responses.is_empty() && inner.state == State::Active =>
-                {
+                Poll::Ready(None) if inner.responses.is_empty() && inner.state == State::Active => {
                     trace!("poll_write: at eof, terminating");
                     inner.state = State::Terminating;
                     let mut request = BytesMut::new();

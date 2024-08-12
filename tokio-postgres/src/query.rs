@@ -1,7 +1,7 @@
 use futures::future::{err, Either};
-use futures::{ready, Future, Stream};
+use futures::{ready, Stream};
 use std::task::{Context, Poll};
-use std::{collections::VecDeque, pin::Pin};
+use std::{collections::VecDeque, future::Future, pin::Pin};
 
 use ntex::util::{BufMut, Bytes, BytesMut, BytesVec};
 use postgres_protocol::message::backend::Message;
@@ -11,94 +11,103 @@ use crate::connection::{ConnectionState, Response};
 use crate::types::{IsNull, ToSql};
 use crate::{codec::FrontendMessage, frontend, Error, Portal, Row, Statement};
 
-pub async fn query(
-    client: &InnerClient,
-    statement: &Statement,
+pub fn query<'a>(
+    client: &'a InnerClient,
+    statement: &'a Statement,
     params: &[&(dyn ToSql)],
-) -> Result<Vec<Row>, Error> {
+) -> impl Future<Output = Result<Vec<Row>, Error>> + 'a {
     let receiver = {
         let mut st = client.con.borrow_mut();
 
-        st.io.with_write_buf(|buf| {
-            // make sure we've got room
-            let remaining = buf.remaining_mut();
-            if remaining < 1024 {
-                buf.reserve(256 * 1024 - remaining);
-            }
+        st.io
+            .with_write_buf(|buf| {
+                // make sure we've got room
+                let remaining = buf.remaining_mut();
+                if remaining < 1024 {
+                    buf.reserve(256 * 1024 - remaining);
+                }
 
-            encode_bind_vec(statement, params, "", buf)?;
-            frontend::execute_vec("", 0, buf).map_err(Error::encode)?;
-            frontend::sync_vec(buf);
-            Ok::<_, Error>(())
-        })??;
+                encode_bind_vec(statement, params, "", buf)?;
+                frontend::execute_vec("", 0, buf).map_err(Error::encode)?;
+                frontend::sync_vec(buf);
 
-        let (sender, receiver) = client.pool.channel();
-        st.responses.push_back(Response { sender });
-        receiver
+                Ok::<_, Error>(())
+            })
+            .map(|_| {
+                let (sender, receiver) = client.pool.channel();
+                st.responses.push_back(Response { sender });
+                receiver
+            })
     };
 
-    let mut messages = receiver.await?;
-    if let Message::BindComplete = messages[0] {
-        let mut rows = Vec::with_capacity(messages.len() - 1);
-        messages.pop_front();
-        for msg in messages {
-            match msg {
-                Message::DataRow(body) => rows.push(Row::new(statement.clone(), body)?),
-                Message::EmptyQueryResponse
+    async move {
+        let mut messages = receiver?.await?;
+        if let Message::BindComplete = messages[0] {
+            let mut rows = Vec::with_capacity(messages.len() - 1);
+            messages.pop_front();
+            for msg in messages {
+                match msg {
+                    Message::DataRow(body) => rows.push(Row::new(statement.clone(), body)?),
+                    Message::EmptyQueryResponse
                     | Message::CommandComplete(_)
                     | Message::PortalSuspended => break,
-                Message::ErrorResponse(body) => return Err(Error::db(body)),
-                _ => return Err(Error::unexpected_message()),
+                    Message::ErrorResponse(body) => return Err(Error::db(body)),
+                    _ => return Err(Error::unexpected_message()),
+                }
             }
+            Ok(rows)
+        } else {
+            Err(Error::unexpected_message())
         }
-        Ok(rows)
-    } else {
-        Err(Error::unexpected_message())
     }
 }
 
-pub async fn query_one(
-    client: &InnerClient,
-    statement: &Statement,
+pub fn query_one<'a>(
+    client: &'a InnerClient,
+    statement: &'a Statement,
     params: &[&(dyn ToSql)],
-) -> Result<Row, Error> {
+) -> impl Future<Output = Result<Row, Error>> + 'a {
     let receiver = {
         let mut st = client.con.borrow_mut();
 
-        st.io.with_write_buf(|buf| {
-            // make sure we've got room
-            let remaining = buf.remaining_mut();
-            if remaining < 1024 {
-                buf.reserve(256 * 1024 - remaining);
-            }
+        st.io
+            .with_write_buf(|buf| {
+                // make sure we've got room
+                let remaining = buf.remaining_mut();
+                if remaining < 1024 {
+                    buf.reserve(256 * 1024 - remaining);
+                }
 
-            encode_bind_vec(statement, params, "", buf)?;
-            frontend::execute_vec("", 0, buf).map_err(Error::encode)?;
-            frontend::sync_vec(buf);
-            Ok::<_, Error>(())
-        })??;
-
-        let (sender, receiver) = client.pool.channel();
-        st.responses.push_back(Response { sender });
-        receiver
+                encode_bind_vec(statement, params, "", buf)?;
+                frontend::execute_vec("", 0, buf).map_err(Error::encode)?;
+                frontend::sync_vec(buf);
+                Ok::<_, Error>(())
+            })
+            .map(|_| {
+                let (sender, receiver) = client.pool.channel();
+                st.responses.push_back(Response { sender });
+                receiver
+            })
     };
 
-    let mut messages = receiver.await?;
-    if let Message::BindComplete = messages[0] {
-        messages.pop_front();
-        if let Some(msg) = messages.pop_front() {
-            match msg {
-                Message::DataRow(body) => return Row::new(statement.clone(), body),
-                Message::EmptyQueryResponse
+    async move {
+        let mut messages = receiver?.await?;
+        if let Message::BindComplete = messages[0] {
+            messages.pop_front();
+            if let Some(msg) = messages.pop_front() {
+                match msg {
+                    Message::DataRow(body) => return Row::new(statement.clone(), body),
+                    Message::EmptyQueryResponse
                     | Message::CommandComplete(_)
                     | Message::PortalSuspended => (),
-                Message::ErrorResponse(body) => return Err(Error::db(body)),
-                _ => (),
+                    Message::ErrorResponse(body) => return Err(Error::db(body)),
+                    _ => (),
+                }
             }
+            Err(Error::unexpected_message())
+        } else {
+            Err(Error::unexpected_message())
         }
-        Err(Error::unexpected_message())
-    } else {
-        Err(Error::unexpected_message())
     }
 }
 

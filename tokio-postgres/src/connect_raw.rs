@@ -1,4 +1,4 @@
-use std::{collections::HashMap, io, pin::Pin, future::poll_fn, task::Context, task::Poll};
+use std::{collections::HashMap, future::poll_fn, io, pin::Pin, task::Context, task::Poll};
 
 use fallible_iterator::FallibleIterator;
 use futures::{ready, Sink, SinkExt, Stream, StreamExt, TryStreamExt};

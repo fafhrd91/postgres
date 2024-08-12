@@ -192,12 +192,12 @@ impl Client {
     /// # Panics
     ///
     /// Panics if the number of parameters provided does not match the number expected.
-    pub async fn query_one(
-        &self,
-        statement: &Statement,
+    pub fn query_one<'a>(
+        &'a self,
+        statement: &'a Statement,
         params: &[&(dyn ToSql)],
-    ) -> Result<Row, Error> {
-        query::query_one(&self.inner, statement, params).await
+    ) -> impl Future<Output = Result<Row, Error>> + 'a {
+        query::query_one(&self.inner, statement, params)
     }
 
     /// Executes a statements which returns zero or one rows, returning it.

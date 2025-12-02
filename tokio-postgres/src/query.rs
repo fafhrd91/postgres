@@ -14,7 +14,7 @@ use crate::{codec::FrontendMessage, frontend, Error, Portal, Row, Statement};
 pub fn query<'a>(
     client: &'a InnerClient,
     statement: &'a Statement,
-    params: &[&(dyn ToSql)],
+    params: &[&dyn ToSql],
 ) -> impl Future<Output = Result<Vec<Row>, Error>> + 'a {
     let receiver = {
         let mut st = client.con.borrow_mut();
@@ -65,7 +65,7 @@ pub fn query<'a>(
 pub fn query_one<'a>(
     client: &'a InnerClient,
     statement: &'a Statement,
-    params: &[&(dyn ToSql)],
+    params: &[&dyn ToSql],
 ) -> impl Future<Output = Result<Row, Error>> + 'a {
     let receiver = {
         let mut st = client.con.borrow_mut();
@@ -143,7 +143,7 @@ pub async fn query_portal(
 pub async fn execute(
     client: &InnerClient,
     statement: Statement,
-    params: &[&(dyn ToSql)],
+    params: &[&dyn ToSql],
 ) -> Result<u64, Error> {
     let buf = encode(client, &statement, params)?;
     let statement = statement.clone();
@@ -184,7 +184,7 @@ async fn start(client: &InnerClient, buf: Bytes) -> Result<VecDeque<Message>, Er
 pub fn encode(
     client: &InnerClient,
     statement: &Statement,
-    params: &[&(dyn ToSql)],
+    params: &[&dyn ToSql],
 ) -> Result<Bytes, Error> {
     client.with_buf(|buf| {
         encode_bind(statement, params, "", buf)?;
@@ -196,7 +196,7 @@ pub fn encode(
 
 pub fn encode_bind(
     statement: &Statement,
-    params: &[&(dyn ToSql)],
+    params: &[&dyn ToSql],
     portal: &str,
     buf: &mut BytesMut,
 ) -> Result<(), Error> {
@@ -224,7 +224,7 @@ pub fn encode_bind(
 
 pub fn encode_bind_vec(
     statement: &Statement,
-    params: &[&(dyn ToSql)],
+    params: &[&dyn ToSql],
     portal: &str,
     buf: &mut BytesVec,
 ) -> Result<(), Error> {

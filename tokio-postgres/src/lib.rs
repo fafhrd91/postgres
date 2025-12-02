@@ -156,8 +156,8 @@ pub mod types;
 ///
 /// [`Config`]: config/struct.Config.html
 #[cfg(feature = "runtime")]
-pub async fn connect(config: &str) -> Result<(Client, Connection), Error> {
-    config.parse::<Config>()?.connect().await
+pub async fn connect(config: &str, cfg: ntex::SharedCfg) -> Result<(Client, Connection), Error> {
+    config.parse::<Config>()?.connect(cfg).await
 }
 
 /// An asynchronous notification.

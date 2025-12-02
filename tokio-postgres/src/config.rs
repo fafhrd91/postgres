@@ -415,8 +415,8 @@ impl Config {
     ///
     /// Requires the `runtime` Cargo feature (enabled by default).
     #[cfg(feature = "runtime")]
-    pub async fn connect(&self) -> Result<(Client, Connection), Error> {
-        connect(self).await
+    pub async fn connect(&self, cfg: ntex::SharedCfg) -> Result<(Client, Connection), Error> {
+        connect(self, cfg).await
     }
 
     /// Connects to a PostgreSQL database over an arbitrary stream.

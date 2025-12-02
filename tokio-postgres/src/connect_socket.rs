@@ -1,6 +1,6 @@
 use std::{future::Future, io, time::Duration};
 
-use ntex::{connect, io::Io, rt, time, util::PoolId};
+use ntex::{connect, io::Io, rt, time};
 
 use crate::config::Host;
 use crate::{Error, Socket};
@@ -11,13 +11,12 @@ pub(crate) async fn connect_socket(
     connect_timeout: Option<Duration>,
     keepalives: bool,
     keepalives_idle: Duration,
+    cfg: ntex::SharedCfg,
 ) -> Result<Io, Error> {
-    PoolId::P10.set_read_params(65535, 8192);
-    PoolId::P10.set_write_params(65535, 8192);
-
     match host {
         Host::Tcp(host) => {
-            let fut = connect::connect(connect::Connect::new(host.clone()).set_port(port));
+            let fut =
+                connect::connect_with(connect::Connect::new(host.clone()).set_port(port), cfg);
             let socket = connect_with_timeout(
                 async move {
                     fut.await
@@ -26,7 +25,6 @@ pub(crate) async fn connect_socket(
                 connect_timeout,
             )
             .await?;
-            socket.set_memory_pool(PoolId::P10.pool_ref());
             Ok(socket)
         }
         #[cfg(unix)]

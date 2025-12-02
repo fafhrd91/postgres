@@ -12,7 +12,7 @@ static NEXT_ID: AtomicUsize = AtomicUsize::new(0);
 pub async fn bind(
     client: &Rc<InnerClient>,
     statement: Statement,
-    params: &[&(dyn ToSql)],
+    params: &[&dyn ToSql],
 ) -> Result<Portal, Error> {
     let name = format!("p{}", NEXT_ID.fetch_add(1, Ordering::SeqCst));
     let buf = client.with_buf(|buf| {

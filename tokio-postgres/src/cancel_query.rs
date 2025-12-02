@@ -33,6 +33,7 @@ pub(crate) async fn cancel_query(
         config.connect_timeout,
         config.keepalives,
         config.keepalives_idle,
+        Default::default(),
     )
     .await?;
 

@@ -168,7 +168,91 @@ async fn authenticate_sasl(
     body: AuthenticationSaslBody,
     config: &Config,
 ) -> Result<(), Error> {
-    panic!()
+    let password = config
+        .password
+        .as_ref()
+        .ok_or_else(|| Error::config("password missing".into()))?;
+
+    let mut has_scram = false;
+    let mut has_scram_plus = false;
+    let mut mechanisms = body.mechanisms();
+    while let Some(mechanism) = mechanisms.next().map_err(Error::parse)? {
+        match mechanism {
+            sasl::SCRAM_SHA_256 => has_scram = true,
+            sasl::SCRAM_SHA_256_PLUS => has_scram_plus = true,
+            _ => {}
+        }
+    }
+
+    // let channel_binding = stream
+    //     .inner
+    //     .get_ref()
+    //     .channel_binding()
+    //     .tls_server_end_point
+    //     .filter(|_| config.channel_binding != config::ChannelBinding::Disable)
+    //     .map(sasl::ChannelBinding::tls_server_end_point);
+
+    let (channel_binding, mechanism) = if has_scram_plus {
+        (sasl::ChannelBinding::unsupported(), sasl::SCRAM_SHA_256)
+        // match channel_binding {
+        //     Some(channel_binding) => (channel_binding, sasl::SCRAM_SHA_256_PLUS),
+        //     None => (sasl::ChannelBinding::unsupported(), sasl::SCRAM_SHA_256),
+        // }
+    } else if has_scram {
+        (sasl::ChannelBinding::unsupported(), sasl::SCRAM_SHA_256)
+        // match channel_binding {
+        //     Some(_) => (sasl::ChannelBinding::unrequested(), sasl::SCRAM_SHA_256),
+        //     None => (sasl::ChannelBinding::unsupported(), sasl::SCRAM_SHA_256),
+        // }
+    } else {
+        return Err(Error::authentication("unsupported SASL mechanism".into()));
+    };
+
+    if mechanism != sasl::SCRAM_SHA_256_PLUS {
+        can_skip_channel_binding(config)?;
+    }
+
+    let mut scram = ScramSha256::new(password, channel_binding);
+
+    let mut buf = BytesMut::new();
+    frontend::sasl_initial_response(mechanism, scram.message(), &mut buf).map_err(Error::encode)?;
+    stream
+        .io
+        .send(FrontendMessage::Raw(buf.freeze()), &PostgresCodec)
+        .await
+        .map_err(|e| Error::from(e.into_inner()))?;
+
+    let body = match stream.try_next().await.map_err(Error::io)? {
+        Some(Message::AuthenticationSaslContinue(body)) => body,
+        Some(Message::ErrorResponse(body)) => return Err(Error::db(body)),
+        Some(_) => return Err(Error::unexpected_message()),
+        None => return Err(Error::closed()),
+    };
+
+    scram
+        .update(body.data())
+        .map_err(|e| Error::authentication(e.into()))?;
+
+    let mut buf = BytesMut::new();
+    frontend::sasl_response(scram.message(), &mut buf).map_err(Error::encode)?;
+    stream
+        .io
+        .send(FrontendMessage::Raw(buf.freeze()), &PostgresCodec)
+        .await
+        .map_err(|e| Error::from(e.into_inner()))?;
+
+    let body = match stream.try_next().await.map_err(Error::io)? {
+        Some(Message::AuthenticationSaslFinal(body)) => body,
+        Some(Message::ErrorResponse(body)) => return Err(Error::db(body)),
+        Some(_) => return Err(Error::unexpected_message()),
+        None => return Err(Error::closed()),
+    };
+
+    scram
+        .finish(body.data())
+        .map_err(|e| Error::authentication(e.into()))?;
+
+    Ok(())
 }
 
 async fn read_info(

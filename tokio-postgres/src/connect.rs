@@ -10,7 +10,7 @@ use crate::connect_socket::connect_socket;
 use crate::tls::{MakeTlsConnect, TlsConnect};
 use crate::{Client, Config, Connection, Error, SimpleQueryMessage, Socket};
 
-pub async fn connect(config: &Config) -> Result<(Client, Connection), Error> {
+pub async fn connect(config: &Config, cfg: ntex::SharedCfg) -> Result<(Client, Connection), Error> {
     if config.host.is_empty() {
         return Err(Error::config("host missing".into()));
     }
@@ -34,7 +34,7 @@ pub async fn connect(config: &Config) -> Result<(Client, Connection), Error> {
             Host::Unix(_) => "",
         };
 
-        match connect_once(host, port, config).await {
+        match connect_once(host, port, config, cfg).await {
             Ok((client, connection)) => return Ok((client, connection)),
             Err(e) => error = Some(e),
         }
@@ -47,6 +47,7 @@ async fn connect_once(
     host: &Host,
     port: u16,
     config: &Config,
+    cfg: ntex::SharedCfg,
 ) -> Result<(Client, Connection), Error> {
     let socket = connect_socket(
         host,
@@ -54,6 +55,7 @@ async fn connect_once(
         config.connect_timeout,
         config.keepalives,
         config.keepalives_idle,
+        cfg,
     )
     .await?;
     let (client, mut connection) = connect_raw(socket, config).await?;

@@ -173,7 +173,7 @@ impl Client {
     pub fn query<'a>(
         &'a self,
         statement: &'a Statement,
-        params: &[&(dyn ToSql)],
+        params: &[&dyn ToSql],
     ) -> impl Future<Output = Result<Vec<Row>, Error>> + 'a {
         self.query_raw(statement, params)
     }
@@ -195,7 +195,7 @@ impl Client {
     pub fn query_one<'a>(
         &'a self,
         statement: &'a Statement,
-        params: &[&(dyn ToSql)],
+        params: &[&dyn ToSql],
     ) -> impl Future<Output = Result<Row, Error>> + 'a {
         query::query_one(&self.inner, statement, params)
     }
@@ -217,7 +217,7 @@ impl Client {
     pub async fn query_opt(
         &self,
         statement: &Statement,
-        params: &[&(dyn ToSql)],
+        params: &[&dyn ToSql],
     ) -> Result<Option<Row>, Error> {
         let rows = self.query_raw(statement, params).await?;
 
@@ -251,7 +251,7 @@ impl Client {
     pub fn query_raw<'a>(
         &'a self,
         statement: &'a Statement,
-        params: &[&(dyn ToSql)],
+        params: &[&dyn ToSql],
     ) -> impl Future<Output = Result<Vec<Row>, Error>> + 'a {
         query::query(&self.inner, statement, params)
     }
@@ -270,7 +270,7 @@ impl Client {
     /// # Panics
     ///
     /// Panics if the number of parameters provided does not match the number expected.
-    pub async fn execute<T>(&self, statement: &T, params: &[&(dyn ToSql)]) -> Result<u64, Error>
+    pub async fn execute<T>(&self, statement: &T, params: &[&dyn ToSql]) -> Result<u64, Error>
     where
         T: ?Sized + ToStatement,
     {
@@ -291,7 +291,7 @@ impl Client {
     /// Panics if the number of parameters provided does not match the number expected.
     ///
     /// [`execute`]: #method.execute
-    pub async fn execute_raw<T>(&self, statement: &T, params: &[&(dyn ToSql)]) -> Result<u64, Error>
+    pub async fn execute_raw<T>(&self, statement: &T, params: &[&dyn ToSql]) -> Result<u64, Error>
     where
         T: ?Sized + ToStatement,
     {

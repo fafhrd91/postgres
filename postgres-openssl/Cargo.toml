@@ -16,7 +16,7 @@ default = ["runtime"]
 runtime = ["tokio-postgres/runtime"]
 
 [dependencies]
-bytes = "0.5"
+bytes = "1"
 futures = "0.3"
 openssl = "0.10"
 tokio = "0.2"

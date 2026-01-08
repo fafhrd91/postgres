@@ -1,6 +1,6 @@
 use std::collections::{HashMap, VecDeque};
 use std::task::{Context, Poll};
-use std::{cell::RefCell, future::Future, io, mem, pin::Pin, rc::Rc};
+use std::{cell::RefCell, cell::UnsafeCell, future::Future, io, mem, pin::Pin, rc::Rc};
 
 use fallible_iterator::FallibleIterator;
 use futures::{ready, Sink, Stream, StreamExt};
@@ -26,7 +26,7 @@ pub struct Response {
     pub sender: pool::Sender<VecDeque<Message>>,
 }
 
-#[derive(PartialEq, Debug)]
+#[derive(PartialEq, Debug, Copy, Clone)]
 pub(crate) enum State {
     Active,
     Terminating,
@@ -45,7 +45,7 @@ pub struct Connection {
     parameters: HashMap<String, String>,
     receiver: mpsc::Receiver<Request>,
     messages: VecDeque<Message>,
-    inner: Rc<RefCell<ConnectionState>>,
+    inner: Rc<UnsafeCell<ConnectionState>>,
 }
 
 pub(crate) struct ConnectionState {
@@ -59,8 +59,8 @@ impl Connection {
         io: Io,
         parameters: HashMap<String, String>,
         receiver: mpsc::Receiver<Request>,
-    ) -> (Connection, Rc<RefCell<ConnectionState>>) {
-        let inner = Rc::new(RefCell::new(ConnectionState {
+    ) -> (Connection, Rc<UnsafeCell<ConnectionState>>) {
+        let inner = Rc::new(UnsafeCell::new(ConnectionState {
             io,
             responses: VecDeque::new(),
             state: State::Active,
@@ -77,7 +77,7 @@ impl Connection {
     }
 
     fn poll_read(&mut self, cx: &mut Context<'_>) -> Result<bool, Error> {
-        let mut inner = self.inner.borrow_mut();
+        let inner = unsafe { &mut *self.inner.get() };
 
         if inner.state != State::Active {
             trace!("poll_read: done");
@@ -129,7 +129,7 @@ impl Connection {
     }
 
     fn poll_write(&mut self, cx: &mut Context<'_>) -> Result<(), Error> {
-        let mut inner = self.inner.borrow_mut();
+        let inner = unsafe { &mut *self.inner.get() };
 
         if inner.state == State::Closing {
             let _ = inner.io.poll_shutdown(cx);
@@ -190,7 +190,7 @@ impl Connection {
     }
 
     fn poll_shutdown(&mut self, cx: &mut Context<'_>) -> Poll<Result<(), Error>> {
-        let inner = self.inner.borrow();
+        let inner = unsafe { &*self.inner.get() };
         if !inner.io.poll_shutdown(cx)?.is_ready() {
             if inner.state != State::Closing {
                 return Poll::Pending;

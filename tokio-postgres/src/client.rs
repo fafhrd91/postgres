@@ -33,7 +33,7 @@ pub struct InnerClient {
     sender: mpsc::Sender<Request>,
     state: UnsafeCell<State>,
     pub(crate) pool: pool::Pool<VecDeque<Message>>,
-    pub(crate) con: Rc<RefCell<ConnectionState>>,
+    pub(crate) con: Rc<UnsafeCell<ConnectionState>>,
 }
 
 impl InnerClient {
@@ -116,7 +116,7 @@ impl Client {
         ssl_mode: SslMode,
         process_id: i32,
         secret_key: i32,
-        con: Rc<RefCell<ConnectionState>>,
+        con: Rc<UnsafeCell<ConnectionState>>,
     ) -> Client {
         Client {
             inner: Rc::new(InnerClient {

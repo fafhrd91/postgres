@@ -16,7 +16,7 @@ impl Drop for Inner {
             let buf = client.with_buf(|buf| {
                 frontend::close(b'P', &self.name, buf).unwrap();
                 frontend::sync(buf);
-                buf.split().freeze()
+                buf.take_bytes()
             });
             let _ = client.send(FrontendMessage::Raw(buf));
         }

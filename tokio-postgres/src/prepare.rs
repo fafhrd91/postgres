@@ -116,7 +116,7 @@ fn encode(client: &InnerClient, name: &str, query: &str, types: &[Type]) -> Resu
         frontend::parse(name, query, types.iter().map(Type::oid), buf).map_err(Error::encode)?;
         frontend::describe(b'S', name, buf).map_err(Error::encode)?;
         frontend::sync(buf);
-        Ok(buf.split().freeze())
+        Ok(buf.take_bytes())
     })
 }
 

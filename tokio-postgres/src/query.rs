@@ -17,7 +17,7 @@ pub fn query<'a>(
     params: &[&dyn ToSql],
 ) -> impl Future<Output = Result<Vec<Row>, Error>> + 'a {
     let receiver = {
-        let mut st = client.con.borrow_mut();
+        let st = unsafe { &mut *client.con.get() };
 
         st.io
             .with_write_buf(|buf| {
@@ -68,7 +68,7 @@ pub fn query_one<'a>(
     params: &[&dyn ToSql],
 ) -> impl Future<Output = Result<Row, Error>> + 'a {
     let receiver = {
-        let mut st = client.con.borrow_mut();
+        let st = unsafe { &mut *client.con.get() };
 
         st.io
             .with_write_buf(|buf| {
@@ -119,7 +119,7 @@ pub async fn query_portal(
     let buf = client.with_buf(|buf| {
         frontend::execute(portal.name(), max_rows, buf);
         frontend::sync(buf);
-        Ok::<_, Error>(buf.split().freeze())
+        Ok::<_, Error>(buf.take_bytes())
     })?;
 
     let statement = portal.statement().clone();
@@ -190,7 +190,7 @@ pub fn encode(
         encode_bind(statement, params, "", buf)?;
         frontend::execute("", 0, buf);
         frontend::sync(buf);
-        Ok(buf.split().freeze())
+        Ok(buf.take_bytes())
     })
 }
 

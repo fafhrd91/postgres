@@ -13,7 +13,7 @@
 // #![warn(missing_docs, rust_2018_idioms, clippy::all)]
 
 use byteorder::{BigEndian, ByteOrder};
-use bytes::{BufMut, BytesMut, BytesVec};
+use bytes::{BufMut, BytesMut};
 use std::io;
 
 pub mod authentication;
@@ -47,9 +47,9 @@ where
     Ok(())
 }
 
-pub fn write_nullable_vec<F, E>(serializer: F, buf: &mut BytesVec) -> Result<(), E>
+pub fn write_nullable_vec<F, E>(serializer: F, buf: &mut BytesMut) -> Result<(), E>
 where
-    F: FnOnce(&mut BytesVec) -> Result<IsNull, E>,
+    F: FnOnce(&mut BytesMut) -> Result<IsNull, E>,
     E: From<io::Error>,
 {
     let base = buf.len();

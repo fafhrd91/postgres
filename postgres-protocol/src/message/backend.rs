@@ -109,10 +109,8 @@ pub enum Message {
 
 impl Message {
     #[inline]
-    pub fn parse(buf: &mut BytesMut) -> io::Result<Option<Message>> {
+    pub fn parse_buffer(buf: &mut BytesMut) -> io::Result<Option<(u8, Buffer)>> {
         if buf.len() < 5 {
-            let to_read = 5 - buf.len();
-            buf.reserve(to_read);
             return Ok(None);
         }
 
@@ -128,16 +126,49 @@ impl Message {
 
         let total_len = len as usize + 1;
         if buf.len() < total_len {
-            let to_read = total_len - buf.len();
-            buf.reserve(to_read);
             return Ok(None);
         }
 
-        let mut buf = Buffer {
-            bytes: buf.split_to(total_len).freeze(),
-            idx: 5,
-        };
+        Ok(Some((
+            tag,
+            Buffer {
+                bytes: buf.split_to(total_len),
+                idx: 5,
+            },
+        )))
+    }
 
+    pub fn parse_buffer_bytes(buf: &mut Bytes) -> io::Result<Option<(u8, Buffer)>> {
+        if buf.len() < 5 {
+            return Ok(None);
+        }
+
+        let tag = buf[0];
+        let len = (&buf[1..5]).read_u32::<BigEndian>().unwrap();
+
+        if len < 4 {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "invalid message length: parsing u32",
+            ));
+        }
+
+        let total_len = len as usize + 1;
+        if buf.len() < total_len {
+            return Ok(None);
+        }
+
+        Ok(Some((
+            tag,
+            Buffer {
+                bytes: buf.split_to(total_len),
+                idx: 5,
+            },
+        )))
+    }
+
+    #[inline]
+    pub fn parse(tag: u8, buf: &mut Buffer) -> io::Result<Option<Message>> {
         let message = match tag {
             PARSE_COMPLETE_TAG => Message::ParseComplete,
             BIND_COMPLETE_TAG => Message::BindComplete,
@@ -278,7 +309,7 @@ impl Message {
     }
 }
 
-struct Buffer {
+pub struct Buffer {
     bytes: Bytes,
     idx: usize,
 }

@@ -19,11 +19,11 @@ pub enum BackendMessage {
 }
 
 #[derive(Debug)]
-pub struct BackendMessages(BytesMut);
+pub struct BackendMessages(Bytes);
 
 impl BackendMessages {
     pub fn empty() -> BackendMessages {
-        BackendMessages(BytesMut::new())
+        BackendMessages(Bytes::new())
     }
 }
 
@@ -32,7 +32,12 @@ impl FallibleIterator for BackendMessages {
     type Error = io::Error;
 
     fn next(&mut self) -> io::Result<Option<backend::Message>> {
-        backend::Message::parse(&mut self.0)
+        let result = backend::Message::parse_buffer_bytes(&mut self.0)?;
+        if let Some((tag, mut buf)) = result {
+            backend::Message::parse(tag, &mut buf)
+        } else {
+            Ok(None)
+        }
     }
 }
 
@@ -71,7 +76,8 @@ impl Decoder for PostgresCodec {
                 | backend::NOTIFICATION_RESPONSE_TAG
                 | backend::PARAMETER_STATUS_TAG => {
                     if idx == 0 {
-                        let message = backend::Message::parse(src)?.unwrap();
+                        let (tag, mut buf) = backend::Message::parse_buffer(src)?.unwrap();
+                        let message = backend::Message::parse(tag, &mut buf)?.unwrap();
                         return Ok(Some(BackendMessage::Async(message)));
                     } else {
                         break;

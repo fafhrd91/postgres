@@ -1,6 +1,6 @@
 //! Conversions to and from Postgres's binary format for various types.
 use byteorder::{BigEndian, ByteOrder, ReadBytesExt};
-use bytes::{BufMut, BytesMut, BytesVec};
+use bytes::{BufMut, BytesMut};
 use fallible_iterator::FallibleIterator;
 use std::boxed::Box as StdBox;
 use std::error::Error;
@@ -30,7 +30,7 @@ pub fn bool_to_sql(v: bool, buf: &mut BytesMut) {
 
 /// Serializes a `BOOL` value.
 #[inline]
-pub fn bool_to_sql_vec(v: bool, buf: &mut BytesVec) {
+pub fn bool_to_sql_vec(v: bool, buf: &mut BytesMut) {
     buf.put_u8(v as u8);
 }
 
@@ -51,7 +51,7 @@ pub fn bytea_to_sql(v: &[u8], buf: &mut BytesMut) {
 }
 
 #[inline]
-pub fn bytea_to_sql_vec(v: &[u8], buf: &mut BytesVec) {
+pub fn bytea_to_sql_vec(v: &[u8], buf: &mut BytesMut) {
     buf.put_slice(v);
 }
 
@@ -68,7 +68,7 @@ pub fn text_to_sql(v: &str, buf: &mut BytesMut) {
 }
 
 #[inline]
-pub fn text_to_sql_vec(v: &str, buf: &mut BytesVec) {
+pub fn text_to_sql_vec(v: &str, buf: &mut BytesMut) {
     buf.put_slice(v.as_bytes());
 }
 
@@ -85,7 +85,7 @@ pub fn char_to_sql(v: i8, buf: &mut BytesMut) {
 }
 
 #[inline]
-pub fn char_to_sql_vec(v: i8, buf: &mut BytesVec) {
+pub fn char_to_sql_vec(v: i8, buf: &mut BytesMut) {
     buf.put_i8(v);
 }
 
@@ -106,7 +106,7 @@ pub fn int2_to_sql(v: i16, buf: &mut BytesMut) {
 }
 
 #[inline]
-pub fn int2_to_sql_vec(v: i16, buf: &mut BytesVec) {
+pub fn int2_to_sql_vec(v: i16, buf: &mut BytesMut) {
     buf.put_i16(v);
 }
 
@@ -127,7 +127,7 @@ pub fn int4_to_sql(v: i32, buf: &mut BytesMut) {
 }
 
 #[inline]
-pub fn int4_to_sql_vec(v: i32, buf: &mut BytesVec) {
+pub fn int4_to_sql_vec(v: i32, buf: &mut BytesMut) {
     buf.put_i32(v);
 }
 
@@ -148,7 +148,7 @@ pub fn oid_to_sql(v: Oid, buf: &mut BytesMut) {
 }
 
 #[inline]
-pub fn oid_to_sql_vec(v: Oid, buf: &mut BytesVec) {
+pub fn oid_to_sql_vec(v: Oid, buf: &mut BytesMut) {
     buf.put_u32(v);
 }
 
@@ -169,7 +169,7 @@ pub fn int8_to_sql(v: i64, buf: &mut BytesMut) {
 }
 
 #[inline]
-pub fn int8_to_sql_vec(v: i64, buf: &mut BytesVec) {
+pub fn int8_to_sql_vec(v: i64, buf: &mut BytesMut) {
     buf.put_i64(v);
 }
 
@@ -190,7 +190,7 @@ pub fn float4_to_sql(v: f32, buf: &mut BytesMut) {
 }
 
 #[inline]
-pub fn float4_to_sql_vec(v: f32, buf: &mut BytesVec) {
+pub fn float4_to_sql_vec(v: f32, buf: &mut BytesMut) {
     buf.put_f32(v);
 }
 
@@ -211,7 +211,7 @@ pub fn float8_to_sql(v: f64, buf: &mut BytesMut) {
 }
 
 #[inline]
-pub fn float8_to_sql_vec(v: f64, buf: &mut BytesVec) {
+pub fn float8_to_sql_vec(v: f64, buf: &mut BytesMut) {
     buf.put_f64(v);
 }
 
@@ -255,7 +255,7 @@ where
 }
 
 #[inline]
-pub fn hstore_to_sql_vec<'a, I>(values: I, buf: &mut BytesVec) -> Result<(), StdBox<dyn Error>>
+pub fn hstore_to_sql_vec<'a, I>(values: I, buf: &mut BytesMut) -> Result<(), StdBox<dyn Error>>
 where
     I: IntoIterator<Item = (&'a str, Option<&'a str>)>,
 {
@@ -289,7 +289,7 @@ fn write_pascal_string(s: &str, buf: &mut BytesMut) -> Result<(), StdBox<dyn Err
     Ok(())
 }
 
-fn write_pascal_string_vec(s: &str, buf: &mut BytesVec) -> Result<(), StdBox<dyn Error>> {
+fn write_pascal_string_vec(s: &str, buf: &mut BytesMut) -> Result<(), StdBox<dyn Error>> {
     let size = i32::from_usize(s.len())?;
     buf.put_i32(size);
     buf.put_slice(s.as_bytes());
@@ -439,7 +439,7 @@ pub fn timestamp_to_sql(v: i64, buf: &mut BytesMut) {
 }
 
 #[inline]
-pub fn timestamp_to_sql_vec(v: i64, buf: &mut BytesVec) {
+pub fn timestamp_to_sql_vec(v: i64, buf: &mut BytesMut) {
     buf.put_i64(v);
 }
 
@@ -584,12 +584,12 @@ pub fn array_to_sql_vec<T, I, J, F>(
     element_type: Oid,
     elements: J,
     mut serializer: F,
-    buf: &mut BytesVec,
+    buf: &mut BytesMut,
 ) -> Result<(), StdBox<dyn Error>>
 where
     I: IntoIterator<Item = ArrayDimension>,
     J: IntoIterator<Item = T>,
-    F: FnMut(T, &mut BytesVec) -> Result<IsNull, StdBox<dyn Error>>,
+    F: FnMut(T, &mut BytesMut) -> Result<IsNull, StdBox<dyn Error>>,
 {
     let dimensions_idx = buf.len();
     buf.put_i32(0);

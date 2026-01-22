@@ -3,7 +3,7 @@ use futures::{ready, Stream};
 use std::task::{Context, Poll};
 use std::{collections::VecDeque, future::Future, pin::Pin};
 
-use ntex::util::{BufMut, Bytes, BytesMut, BytesVec};
+use ntex::util::{BufMut, Bytes, BytesMut};
 use postgres_protocol::message::backend::Message;
 
 use crate::client::{InnerClient, Responses};
@@ -22,14 +22,12 @@ pub fn query<'a>(
         st.io
             .with_write_buf(|buf| {
                 // make sure we've got room
-                let remaining = buf.remaining_mut();
-                if remaining < 1024 {
-                    buf.reserve(256 * 1024 - remaining);
+                if buf.remaining_mut() < 1024 {
+                    buf.reserve_capacity(256 * 1024);
                 }
-
-                encode_bind_vec(statement, params, "", buf)?;
-                frontend::execute_vec("", 0, buf);
-                frontend::sync_vec(buf);
+                encode_bind(statement, params, "", buf)?;
+                frontend::execute("", 0, buf);
+                frontend::sync(buf);
 
                 Ok::<_, Error>(())
             })
@@ -73,14 +71,12 @@ pub fn query_one<'a>(
         st.io
             .with_write_buf(|buf| {
                 // make sure we've got room
-                let remaining = buf.remaining_mut();
-                if remaining < 1024 {
-                    buf.reserve(256 * 1024 - remaining);
+                if buf.remaining_mut() < 1024 {
+                    buf.reserve_capacity(256 * 1024);
                 }
-
-                encode_bind_vec(statement, params, "", buf)?;
-                frontend::execute_vec("", 0, buf);
-                frontend::sync_vec(buf);
+                encode_bind(statement, params, "", buf)?;
+                frontend::execute("", 0, buf);
+                frontend::sync(buf);
                 Ok::<_, Error>(())
             })
             .map(|_| {
@@ -119,7 +115,7 @@ pub async fn query_portal(
     let buf = client.with_buf(|buf| {
         frontend::execute(portal.name(), max_rows, buf);
         frontend::sync(buf);
-        Ok::<_, Error>(buf.take_bytes())
+        Ok::<_, Error>(buf.take())
     })?;
 
     let statement = portal.statement().clone();
@@ -187,10 +183,14 @@ pub fn encode(
     params: &[&dyn ToSql],
 ) -> Result<Bytes, Error> {
     client.with_buf(|buf| {
+        // make sure we've got room
+        if buf.remaining_mut() < 1024 {
+            buf.reserve_capacity(256 * 1024);
+        }
         encode_bind(statement, params, "", buf)?;
         frontend::execute("", 0, buf);
         frontend::sync(buf);
-        Ok(buf.take_bytes())
+        Ok(buf.take())
     })
 }
 
@@ -204,34 +204,6 @@ pub fn encode_bind(
 
     let mut error_idx = 0;
     let r = frontend::bind(
-        portal,
-        statement.name(),
-        Some(1),
-        params.zip(statement.params()).enumerate(),
-        |(idx, (param, ty)), buf| match param.to_sql_checked(ty, buf) {
-            Ok(IsNull::No) => Ok(postgres_protocol::IsNull::No),
-            Ok(IsNull::Yes) => Ok(postgres_protocol::IsNull::Yes),
-            Err(e) => {
-                error_idx = idx;
-                Err(e)
-            }
-        },
-        Some(1),
-        buf,
-    );
-    Ok(())
-}
-
-pub fn encode_bind_vec(
-    statement: &Statement,
-    params: &[&dyn ToSql],
-    portal: &str,
-    buf: &mut BytesVec,
-) -> Result<(), Error> {
-    let params = params.iter();
-
-    let mut error_idx = 0;
-    let r = frontend::bind_vec(
         portal,
         statement.name(),
         Some(1),

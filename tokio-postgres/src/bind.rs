@@ -18,7 +18,7 @@ pub async fn bind(
     let buf = client.with_buf(|buf| {
         query::encode_bind(&statement, params, &name, buf)?;
         frontend::sync(buf);
-        Ok::<_, Error>(buf.take_bytes())
+        Ok::<_, Error>(buf.take())
     })?;
 
     let responses = client.send(FrontendMessage::Raw(buf))?;

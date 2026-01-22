@@ -4,7 +4,7 @@
 use std::{error::Error, io, marker};
 
 use byteorder::{BigEndian, ByteOrder};
-use ntex::util::{Buf, BufMut, BytesMut, BytesVec};
+use ntex::util::{Buf, BufMut, BytesMut};
 
 use postgres_protocol::{write_nullable, write_nullable_vec, IsNull, Oid};
 
@@ -12,20 +12,6 @@ use postgres_protocol::{write_nullable, write_nullable_vec, IsNull, Oid};
 fn write_body<F>(buf: &mut BytesMut, f: F)
 where
     F: FnOnce(&mut BytesMut),
-{
-    let base = buf.len();
-    buf.extend_from_slice(&[0; 4]);
-
-    f(buf);
-
-    let size = (buf.len() - base) as i32;
-    BigEndian::write_i32(&mut buf[base..], size);
-}
-
-#[inline]
-fn write_body_vec<F>(buf: &mut BytesVec, f: F)
-where
-    F: FnOnce(&mut BytesVec),
 {
     let base = buf.len();
     buf.extend_from_slice(&[0; 4]);
@@ -98,69 +84,10 @@ pub(crate) fn bind<I, J, F, T, K>(
 }
 
 #[inline]
-pub(crate) fn bind_vec<I, J, F, T, K>(
-    portal: &str,
-    statement: &str,
-    formats: I,
-    values: J,
-    mut serializer: F,
-    result_formats: K,
-    buf: &mut BytesVec,
-) where
-    I: IntoIterator<Item = i16>,
-    J: IntoIterator<Item = T>,
-    F: FnMut(T, &mut BytesVec) -> Result<IsNull, Box<dyn Error>>,
-    K: IntoIterator<Item = i16>,
-{
-    buf.put_u8(b'B');
-
-    write_body_vec(buf, |buf| {
-        write_cstr_vec(portal.as_bytes(), buf);
-        write_cstr_vec(statement.as_bytes(), buf);
-        write_counted_vec(
-            formats,
-            |f, buf| {
-                buf.put_i16(f);
-            },
-            buf,
-        );
-        write_counted_vec(
-            values,
-            |v, buf| write_nullable_vec(|buf| serializer(v, buf), buf).unwrap(),
-            buf,
-        );
-        write_counted_vec(
-            result_formats,
-            |f, buf| {
-                buf.put_i16(f);
-            },
-            buf,
-        );
-    })
-}
-
-#[inline]
 fn write_counted<I, T, F>(items: I, mut serializer: F, buf: &mut BytesMut)
 where
     I: IntoIterator<Item = T>,
     F: FnMut(T, &mut BytesMut),
-{
-    let base = buf.len();
-    buf.extend_from_slice(&[0; 2]);
-    let mut count = 0;
-    for item in items {
-        serializer(item, buf);
-        count += 1;
-    }
-    let count = i16::try_from(count).unwrap();
-    BigEndian::write_i16(&mut buf[base..], count);
-}
-
-#[inline]
-fn write_counted_vec<I, T, F>(items: I, mut serializer: F, buf: &mut BytesVec)
-where
-    I: IntoIterator<Item = T>,
-    F: FnMut(T, &mut BytesVec),
 {
     let base = buf.len();
     buf.extend_from_slice(&[0; 2]);
@@ -252,15 +179,6 @@ pub(crate) fn execute(portal: &str, max_rows: i32, buf: &mut BytesMut) {
 }
 
 #[inline]
-pub(crate) fn execute_vec(portal: &str, max_rows: i32, buf: &mut BytesVec) {
-    buf.put_u8(b'E');
-    write_body_vec(buf, |buf| {
-        write_cstr_vec(portal.as_bytes(), buf);
-        buf.put_i32(max_rows);
-    });
-}
-
-#[inline]
 pub(crate) fn parse<I>(name: &str, query: &str, param_types: I, buf: &mut BytesMut)
 where
     I: IntoIterator<Item = Oid>,
@@ -342,23 +260,12 @@ pub(crate) fn sync(buf: &mut BytesMut) {
 }
 
 #[inline]
-pub(crate) fn sync_vec(buf: &mut BytesVec) {
-    buf.extend_from_slice(&[b'S', 0, 0, 0, 4]);
-}
-
-#[inline]
 pub(crate) fn terminate(buf: &mut BytesMut) {
     buf.extend_from_slice(&[b'X', 0, 0, 0, 4]);
 }
 
 #[inline]
 fn write_cstr(s: &[u8], buf: &mut BytesMut) {
-    buf.put_slice(s);
-    buf.put_u8(0);
-}
-
-#[inline]
-fn write_cstr_vec(s: &[u8], buf: &mut BytesVec) {
     buf.put_slice(s);
     buf.put_u8(0);
 }

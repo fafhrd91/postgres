@@ -131,7 +131,7 @@ use crate::type_gen::{Inner, Other};
 pub use postgres_protocol::Oid;
 
 // pub use crate::special::{Date, Timestamp};
-use bytes::{BytesMut, BytesVec};
+use bytes::BytesMut;
 
 // Number of seconds from 1970-01-01 to 2000-01-01
 const TIME_SEC_CONVERSION: u64 = 946_684_800;
@@ -177,7 +177,7 @@ macro_rules! to_sql_checked_vec {
         fn to_sql_checked_vec(
             &self,
             ty: &$crate::Type,
-            out: &mut $crate::private::BytesVec,
+            out: &mut $crate::private::BytesMut,
         ) -> ::std::result::Result<$crate::IsNull, Box<dyn ::std::error::Error>> {
             $crate::__to_sql_vec_checked(self, ty, out)
         }
@@ -203,7 +203,7 @@ where
 pub fn __to_sql_vec_checked<T>(
     v: &T,
     ty: &Type,
-    out: &mut BytesVec,
+    out: &mut BytesMut,
 ) -> Result<IsNull, Box<dyn Error>>
 where
     T: ToSql,
@@ -703,7 +703,7 @@ pub trait ToSql: fmt::Debug {
     where
         Self: Sized;
 
-    fn to_sql_vec(&self, ty: &Type, out: &mut BytesVec) -> Result<IsNull, Box<dyn Error>>
+    fn to_sql_vec(&self, ty: &Type, out: &mut BytesMut) -> Result<IsNull, Box<dyn Error>>
     where
         Self: Sized;
 
@@ -719,7 +719,7 @@ pub trait ToSql: fmt::Debug {
     /// `to_sql_checked!()` macro.
     fn to_sql_checked(&self, ty: &Type, out: &mut BytesMut) -> Result<IsNull, Box<dyn Error>>;
 
-    fn to_sql_checked_vec(&self, ty: &Type, out: &mut BytesVec) -> Result<IsNull, Box<dyn Error>>;
+    fn to_sql_checked_vec(&self, ty: &Type, out: &mut BytesMut) -> Result<IsNull, Box<dyn Error>>;
 }
 
 impl<'a, T> ToSql for &'a T
@@ -730,7 +730,7 @@ where
         (*self).to_sql(ty, out)
     }
 
-    fn to_sql_vec(&self, ty: &Type, out: &mut BytesVec) -> Result<IsNull, Box<dyn Error>> {
+    fn to_sql_vec(&self, ty: &Type, out: &mut BytesMut) -> Result<IsNull, Box<dyn Error>> {
         (*self).to_sql_vec(ty, out)
     }
 
@@ -750,7 +750,7 @@ impl<T: ToSql> ToSql for Option<T> {
         }
     }
 
-    fn to_sql_vec(&self, ty: &Type, out: &mut BytesVec) -> Result<IsNull, Box<dyn Error>> {
+    fn to_sql_vec(&self, ty: &Type, out: &mut BytesMut) -> Result<IsNull, Box<dyn Error>> {
         match *self {
             Some(ref val) => val.to_sql_vec(ty, out),
             None => Ok(IsNull::Yes),
@@ -790,7 +790,7 @@ impl<'a, T: ToSql> ToSql for &'a [T] {
         Ok(IsNull::No)
     }
 
-    fn to_sql_vec(&self, ty: &Type, w: &mut BytesVec) -> Result<IsNull, Box<dyn Error>> {
+    fn to_sql_vec(&self, ty: &Type, w: &mut BytesMut) -> Result<IsNull, Box<dyn Error>> {
         let member_type = match *ty.kind() {
             Kind::Array(ref member) => member,
             _ => panic!("expected array type"),
@@ -831,7 +831,7 @@ impl<'a> ToSql for &'a [u8] {
         Ok(IsNull::No)
     }
 
-    fn to_sql_vec(&self, _: &Type, w: &mut BytesVec) -> Result<IsNull, Box<dyn Error>> {
+    fn to_sql_vec(&self, _: &Type, w: &mut BytesMut) -> Result<IsNull, Box<dyn Error>> {
         types::bytea_to_sql_vec(*self, w);
         Ok(IsNull::No)
     }
@@ -847,7 +847,7 @@ impl<T: ToSql> ToSql for Vec<T> {
         <&[T] as ToSql>::to_sql(&&**self, ty, w)
     }
 
-    fn to_sql_vec(&self, ty: &Type, w: &mut BytesVec) -> Result<IsNull, Box<dyn Error>> {
+    fn to_sql_vec(&self, ty: &Type, w: &mut BytesMut) -> Result<IsNull, Box<dyn Error>> {
         <&[T] as ToSql>::to_sql_vec(&&**self, ty, w)
     }
 
@@ -864,7 +864,7 @@ impl ToSql for Vec<u8> {
         <&[u8] as ToSql>::to_sql(&&**self, ty, w)
     }
 
-    fn to_sql_vec(&self, ty: &Type, w: &mut BytesVec) -> Result<IsNull, Box<dyn Error>> {
+    fn to_sql_vec(&self, ty: &Type, w: &mut BytesMut) -> Result<IsNull, Box<dyn Error>> {
         <&[u8] as ToSql>::to_sql_vec(&&**self, ty, w)
     }
 
@@ -882,7 +882,7 @@ impl<'a> ToSql for &'a str {
         Ok(IsNull::No)
     }
 
-    fn to_sql_vec(&self, _: &Type, w: &mut BytesVec) -> Result<IsNull, Box<dyn Error>> {
+    fn to_sql_vec(&self, _: &Type, w: &mut BytesMut) -> Result<IsNull, Box<dyn Error>> {
         types::text_to_sql_vec(*self, w);
         Ok(IsNull::No)
     }
@@ -904,7 +904,7 @@ impl ToSql for String {
         <&str as ToSql>::to_sql(&&**self, ty, w)
     }
 
-    fn to_sql_vec(&self, ty: &Type, w: &mut BytesVec) -> Result<IsNull, Box<dyn Error>> {
+    fn to_sql_vec(&self, ty: &Type, w: &mut BytesMut) -> Result<IsNull, Box<dyn Error>> {
         <&str as ToSql>::to_sql_vec(&&**self, ty, w)
     }
 
@@ -929,7 +929,7 @@ macro_rules! simple_to {
 
             fn to_sql_vec(&self,
                       _: &Type,
-                      w: &mut BytesVec)
+                      w: &mut BytesMut)
                       -> Result<IsNull, Box<dyn Error>> {
                 types::$f1(*self, w);
                 Ok(IsNull::No)
@@ -964,7 +964,7 @@ where
         Ok(IsNull::No)
     }
 
-    fn to_sql_vec(&self, _: &Type, w: &mut BytesVec) -> Result<IsNull, Box<dyn Error>> {
+    fn to_sql_vec(&self, _: &Type, w: &mut BytesMut) -> Result<IsNull, Box<dyn Error>> {
         types::hstore_to_sql_vec(
             self.iter().map(|(k, v)| (&**k, v.as_ref().map(|v| &**v))),
             w,
@@ -996,7 +996,7 @@ impl ToSql for SystemTime {
         Ok(IsNull::No)
     }
 
-    fn to_sql_vec(&self, _: &Type, w: &mut BytesVec) -> Result<IsNull, Box<dyn Error>> {
+    fn to_sql_vec(&self, _: &Type, w: &mut BytesMut) -> Result<IsNull, Box<dyn Error>> {
         let epoch = UNIX_EPOCH + Duration::from_secs(TIME_SEC_CONVERSION);
 
         let to_usec =

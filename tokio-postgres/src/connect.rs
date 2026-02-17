@@ -34,7 +34,7 @@ pub async fn connect(config: &Config, cfg: ntex::SharedCfg) -> Result<(Client, C
             Host::Unix(_) => "",
         };
 
-        match connect_once(host, port, config, cfg).await {
+        match connect_once(host, port, config, cfg.clone()).await {
             Ok((client, connection)) => return Ok((client, connection)),
             Err(e) => error = Some(e),
         }
